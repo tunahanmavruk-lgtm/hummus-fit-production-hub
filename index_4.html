@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Hummus Fit Production Hub</title>
+<style>
+  :root{
+    --bg:#f4f5f7;
+    --card:#ffffff;
+    --border:#e3e5ea;
+    --text:#111827;
+    --text-dim:#6b7280;
+    --text-faint:#9aa1ad;
+    --blue:#3b62f6;
+    --blue-dark:#2947c9;
+    --blue-tint:#eaefff;
+    --green:#16a34a;
+    --green-tint:#e7f7ed;
+    --amber:#b8860b;
+    --amber-tint:#fdf3d9;
+    --gray-tint:#eef0f3;
+    --red:#dc2626;
+    --red-tint:#fde8e8;
+    --radius:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:17px;
+    -webkit-tap-highlight-color:transparent;
+    user-select:none;
+    overflow-x:hidden;
+  }
+  button{ font-family:inherit; cursor:pointer; border:none; touch-action:manipulation; background:none; }
+  input{ font-family:inherit; }
+
+  #app{ display:flex; flex-direction:column; min-height:100vh; }
+
+  /* ===== Header ===== */
+  header{
+    background:var(--card);
+    padding:16px 20px;
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    border-bottom:1px solid var(--border);
+    position:sticky; top:0; z-index:30;
+  }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand .logo-dot{
+    width:36px;height:36px;border-radius:10px;
+    background:var(--blue);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:800; font-size:17px; color:#fff; flex:none;
+  }
+  .brand h1{ font-size:19px; margin:0; line-height:1.15; color:var(--text); }
+  .brand .sub{ font-size:12px; color:var(--text-faint); }
+  .header-right{ display:flex; align-items:center; gap:10px; }
+  #clock{ text-align:right; font-size:12px; color:var(--text-dim); line-height:1.3; }
+  #clock .time{ font-size:18px; font-weight:700; color:var(--text); }
+  .icon-btn{
+    background:var(--gray-tint); color:var(--text);
+    border-radius:10px; padding:9px 13px; font-size:14px; font-weight:600;
+  }
+  .icon-btn:active{ background:var(--border); }
+  #syncStatus{
+    font-size:11px; padding:4px 9px; border-radius:20px; font-weight:700;
+    background:var(--gray-tint); display:inline-flex; align-items:center; gap:6px; color:var(--text-dim);
+  }
+  #syncStatus .dot{ width:7px; height:7px; border-radius:50%; background:var(--text-faint); }
+  #syncStatus.live .dot{ background:var(--green); }
+  #syncStatus.offline .dot{ background:var(--red); }
+  #syncStatus.syncing .dot{ background:var(--amber); }
+
+  /* ===== KPI bar ===== */
+  #kpiBar{ padding:16px 16px 4px; }
+  .kpi-grid{
+    display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:14px;
+  }
+  @media (min-width:700px){ .kpi-grid{ grid-template-columns:repeat(4,1fr); } }
+  .kpi-tile{
+    background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px 16px;
+  }
+  .kpi-tile .kpi-label{ font-size:13px; color:var(--text-dim); margin-bottom:4px; }
+  .kpi-tile .kpi-value{ font-size:26px; font-weight:800; color:var(--text); line-height:1.1; }
+  .kpi-tile .kpi-sub{ font-size:12.5px; color:var(--text-faint); margin-top:3px; }
+  .kpi-tile .kpi-sub.good{ color:var(--green); font-weight:700; }
+  .kpi-tile .kpi-sub.bad{ color:var(--red); font-weight:700; }
+
+  .goal-row{
+    background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px 16px; margin-bottom:16px;
+  }
+  .goal-row .goal-head{ display:flex; justify-content:space-between; font-size:13px; color:var(--text-dim); margin-bottom:8px; }
+  .goal-bar-track{ height:12px; border-radius:20px; background:var(--gray-tint); overflow:hidden; }
+  .goal-bar-fill{ height:100%; background:var(--blue); border-radius:20px; transition:width .3s; }
+
+  /* ===== Nav Tabs (pill style) ===== */
+  nav#tabs{
+    display:flex; gap:8px; padding:0 16px 14px; overflow-x:auto;
+  }
+  nav#tabs button{
+    flex:none; background:var(--card); color:var(--text-dim); border:1px solid var(--border);
+    padding:12px 18px; font-size:14.5px; font-weight:700; border-radius:12px; white-space:nowrap;
+    display:flex; align-items:center; gap:6px;
+  }
+  nav#tabs button .count{
+    background:var(--gray-tint); color:var(--text); border-radius:20px; padding:1px 8px; font-size:12px;
+  }
+  nav#tabs button.active{ background:var(--blue); color:#fff; border-color:var(--blue); }
+  nav#tabs button.active .count{ background:rgba(255,255,255,.25); color:#fff; }
+
+  /* ===== Main ===== */
+  main{ flex:1; padding:0 16px 60px; }
+  .view{ display:none; }
+  .view.active{ display:block; }
+  .view-title{ font-size:18px; font-weight:800; margin:6px 2px 14px; display:flex; align-items:center; justify-content:space-between; }
+  .view-title .hint{ font-size:12.5px; color:var(--text-faint); font-weight:500; }
+
+  /* Station grid */
+  #stationGrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+  @media (min-width:700px){ #stationGrid{ grid-template-columns:repeat(3,1fr); } }
+  .station-card{
+    background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:16px; display:flex; flex-direction:column; gap:8px; min-height:140px; text-align:left;
+  }
+  .station-card:active{ background:var(--gray-tint); }
+  .station-card .st-num{ font-size:13px; font-weight:800; color:var(--blue); letter-spacing:.4px; }
+  .station-card .st-crew{ font-size:13.5px; color:var(--text-dim); }
+  .station-card .st-meals{ font-size:12.5px; color:var(--text-faint); margin-top:auto; }
+  .station-card .st-badges{ display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .badge{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; text-transform:uppercase; letter-spacing:.3px; }
+  .badge.notstarted{ background:var(--gray-tint); color:var(--text-dim); }
+  .badge.inprogress{ background:var(--blue-tint); color:var(--blue-dark); }
+  .badge.packaging{ background:var(--amber-tint); color:var(--amber); }
+  .badge.finished{ background:var(--green-tint); color:var(--green); }
+
+  /* Operating panel */
+  .back-link{ display:inline-flex; align-items:center; gap:6px; color:var(--blue); font-weight:700; font-size:14.5px; margin-bottom:14px; }
+  .panel-card{ background:var(--card); border:1px solid var(--border); border-radius:20px; padding:20px; margin-bottom:16px; }
+  .panel-head{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px; }
+  .panel-head h2{ margin:0; font-size:20px; }
+  .panel-meal-name{ font-size:15px; color:var(--text-dim); margin-bottom:16px; }
+  .pill-status{ font-size:12px; font-weight:800; padding:5px 12px; border-radius:20px; white-space:nowrap; }
+  .pill-status.notstarted{ background:var(--gray-tint); color:var(--text-dim); }
+  .pill-status.inprogress{ background:var(--blue-tint); color:var(--blue-dark); }
+  .pill-status.packaging{ background:var(--amber-tint); color:var(--amber); }
+  .pill-status.finished{ background:var(--green-tint); color:var(--green); }
+
+  .stat-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
+  .stat-box{ border:1px solid var(--border); border-radius:14px; padding:12px 14px; }
+  .stat-box .stat-label{ font-size:12px; color:var(--text-dim); margin-bottom:4px; }
+  .stat-box .stat-value{ font-size:19px; font-weight:800; }
+  .stat-box input.target-input{
+    width:100%; border:none; font-size:19px; font-weight:800; font-family:inherit;
+    background:transparent; color:var(--text); padding:0;
+  }
+  .stat-box input.target-input:focus{ outline:none; }
+
+  .btn{ padding:15px 20px; border-radius:12px; font-weight:800; font-size:16px; min-height:54px; text-align:center; }
+  .btn.primary{ background:var(--blue); color:#fff; flex:1; }
+  .btn.primary:active{ background:var(--blue-dark); }
+  .btn.outline{ background:var(--card); color:var(--text); border:1px solid var(--border); }
+  .btn.outline:active{ background:var(--gray-tint); }
+  .btn.green{ background:var(--green); color:#fff; }
+  .btn.green:active{ background:#0f7c37; }
+  .btn.full{ width:100%; }
+  .btn:disabled{ opacity:.4; }
+  .btn-row{ display:flex; gap:10px; flex-wrap:wrap; }
+  .btn-row .btn{ flex:1; min-width:140px; }
+
+  .stamp-row{ display:flex; align-items:center; gap:8px; margin-top:12px; }
+  .stamp-row .stamp-text{ font-size:13px; color:var(--text-dim); }
+  .clear-x{
+    background:var(--gray-tint); color:var(--text-dim); border:1px solid var(--border); border-radius:50%;
+    width:28px; height:28px; font-size:14px; font-weight:800; display:flex; align-items:center; justify-content:center; flex:none;
+  }
+  .clear-x:active{ background:var(--red-tint); color:var(--red); border-color:var(--red); }
+  .edit-pencil{ background:none; color:var(--blue); border:none; font-size:13px; font-weight:700; text-decoration:underline; }
+
+  .empty-state{ text-align:center; color:var(--text-faint); padding:44px 20px; font-size:14.5px; }
+  .empty-state .big{ font-size:38px; display:block; margin-bottom:10px; }
+
+  .bottom-summary{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }
+  .bottom-summary .stat-box{ text-align:left; }
+
+  /* Meal cards (Packaging / Finished / Quality lists) */
+  .meal-card{ background:var(--card); border:1px solid var(--border); border-left:5px solid var(--text-faint); border-radius:14px; padding:14px 16px; margin-bottom:12px; }
+  .meal-card.stage-not_started{ border-left-color:var(--text-faint); }
+  .meal-card.stage-in_progress{ border-left-color:var(--blue); }
+  .meal-card.stage-packaging{ border-left-color:var(--amber); }
+  .meal-card.stage-finished{ border-left-color:var(--green); }
+  .meal-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .meal-name{ font-size:16px; font-weight:800; }
+  .meal-meta{ font-size:12.5px; color:var(--text-dim); margin-top:3px; }
+  .meal-stage-label{ font-size:11.5px; font-weight:800; text-transform:uppercase; padding:4px 9px; border-radius:20px; white-space:nowrap; }
+  .stage-not_started .meal-stage-label{ background:var(--gray-tint); color:var(--text-dim); }
+  .stage-in_progress .meal-stage-label{ background:var(--blue-tint); color:var(--blue-dark); }
+  .stage-packaging .meal-stage-label{ background:var(--amber-tint); color:var(--amber); }
+  .stage-finished .meal-stage-label{ background:var(--green-tint); color:var(--green); }
+  .units-row{ display:flex; gap:10px; align-items:center; margin-top:12px; }
+  .units-row input[type=number]{
+    flex:1; min-width:0; font-size:20px; font-weight:800; text-align:center; padding:12px;
+    border-radius:12px; border:1px solid var(--border); background:var(--gray-tint); color:var(--text);
+  }
+  .units-row input[type=number]:focus{ outline:2px solid var(--blue); }
+
+  /* Modal (settings) */
+  .modal{ position:fixed; inset:0; background:rgba(15,17,20,.45); display:flex; align-items:flex-end; justify-content:center; z-index:50; }
+  .modal.hidden{ display:none; }
+  .modal-sheet{ background:var(--card); width:100%; max-width:720px; border-radius:20px 20px 0 0; padding:20px; max-height:88vh; overflow-y:auto; }
+  .modal-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .modal-head h2{ margin:0; font-size:19px; }
+  .close-x{ background:var(--gray-tint); color:var(--text); border-radius:50%; width:38px; height:38px; font-size:18px; }
+
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:12.5px; font-weight:700; color:var(--text-dim); margin-bottom:6px; }
+  .field input[type=text], .field input[type=number], .field input[type=time], .field textarea{
+    width:100%; padding:11px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:14.5px;
+  }
+  .field textarea{ min-height:80px; font-family:monospace; font-size:12px; }
+  .field .help{ font-size:12px; color:var(--text-faint); margin-top:4px; }
+  .settings-section{ border-top:1px solid var(--border); padding-top:14px; margin-top:14px; }
+  .settings-section h3{ font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:var(--blue); margin:0 0 10px; }
+
+  table.inv-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  table.inv-table th, table.inv-table td{ padding:8px 6px; border-bottom:1px solid var(--border); text-align:left; }
+  table.inv-table th{ color:var(--text-dim); font-weight:700; position:sticky; top:0; background:var(--card); }
+
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:var(--text); color:#fff; padding:12px 20px; border-radius:30px;
+    font-size:14px; font-weight:700; z-index:100; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90%; text-align:center;
+  }
+  .toast.show{ opacity:1; }
+
+  /* Quality / Help / Training */
+  .q-row{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; margin-bottom:10px; }
+  .q-actions{ display:flex; gap:8px; margin-top:10px; }
+  .q-actions .btn{ flex:1; min-height:44px; font-size:14px; padding:10px; }
+  .btn.pass{ background:var(--green-tint); color:var(--green); }
+  .btn.fail{ background:var(--red-tint); color:var(--red); }
+  .btn.selected.pass{ background:var(--green); color:#fff; }
+  .btn.selected.fail{ background:var(--red); color:#fff; }
+  .log-entry{ display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); font-size:13.5px; }
+  .log-entry:last-child{ border-bottom:none; }
+  .help-station-btn{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; text-align:center; font-weight:700; }
+  .help-station-btn.flagged{ background:var(--red-tint); border-color:var(--red); color:var(--red); }
+  .training-item{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; margin-bottom:10px; display:flex; align-items:flex-start; gap:12px; }
+  .training-item input[type=checkbox]{ width:22px; height:22px; margin-top:2px; flex:none; }
+  .training-item.done .t-text{ color:var(--text-faint); text-decoration:line-through; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="brand">
+      <div class="logo-dot">H</div>
+      <div>
+        <h1>Hummus Fit Production Hub</h1>
+        <div class="sub">Read-only from Sheets &middot; no write-back</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="clock"><div class="time" id="clockTime">--:--</div><div id="clockDate">--</div></div>
+      <button class="icon-btn" id="btnSync">&#8635;</button>
+      <button class="icon-btn" id="btnSettings">&#9881;</button>
+    </div>
+  </header>
+
+  <div id="kpiBar">
+    <div id="syncStatus" class="offline" style="margin-bottom:12px;"><span class="dot"></span><span id="syncStatusText">Not synced</span></div>
+    <div class="kpi-grid">
+      <div class="kpi-tile">
+        <div class="kpi-label">Units Completed</div>
+        <div class="kpi-value" id="kpiCompleted">0</div>
+        <div class="kpi-sub">Goal: <span id="kpiGoal">0</span></div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Shift Progress</div>
+        <div class="kpi-value" id="kpiProgress">0%</div>
+        <div class="kpi-sub" id="kpiProgressSub">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Current Rate</div>
+        <div class="kpi-value" id="kpiRate">0/hr</div>
+        <div class="kpi-sub">Target: <span id="kpiTargetRate">0</span>/hr</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Estimated Finish</div>
+        <div class="kpi-value" id="kpiFinish">--:--</div>
+        <div class="kpi-sub" id="kpiFinishSub">—</div>
+      </div>
+    </div>
+    <div class="goal-row">
+      <div class="goal-head"><span>Daily production goal</span><span><span id="goalCurrent">0</span> of <span id="goalTotal">0</span></span></div>
+      <div class="goal-bar-track"><div class="goal-bar-fill" id="goalBarFill" style="width:0%;"></div></div>
+    </div>
+  </div>
+
+  <nav id="tabs">
+    <button data-view="production" class="active">Production<span class="count" id="cntStations">0</span></button>
+    <button data-view="packaging">Packaging<span class="count" id="cntPackaging">0</span></button>
+    <button data-view="finished">Finished<span class="count" id="cntFinished">0</span></button>
+    <button data-view="inventory">Inventory Ref</button>
+    <button data-view="quality">Quality</button>
+    <button data-view="help">Request Help<span class="count" id="cntHelp">0</span></button>
+    <button data-view="training">Training</button>
+  </nav>
+
+  <main>
+    <!-- PRODUCTION VIEW -->
+    <section class="view active" id="view-production">
+      <div id="productionGrid">
+        <div class="view-title">Stations <span class="hint">Tap a station to open it</span></div>
+        <div id="stationGrid"></div>
+      </div>
+      <div id="productionPanel" style="display:none;">
+        <button class="back-link" id="btnBackToStations">&larr; All Stations</button>
+        <div id="panelBody"></div>
+      </div>
+      <div class="bottom-summary">
+        <div class="stat-box"><div class="stat-label">Last Quality Check</div><div class="stat-value" id="sumLastQuality" style="font-size:15px;">—</div></div>
+        <div class="stat-box"><div class="stat-label">Open Requests</div><div class="stat-value" id="sumOpenRequests">0</div></div>
+        <div class="stat-box"><div class="stat-label">Shift Status</div><div class="stat-value" id="sumShiftStatus" style="font-size:15px;">—</div></div>
+      </div>
+    </section>
+
+    <!-- PACKAGING VIEW -->
+    <section class="view" id="view-packaging">
+      <div class="view-title">Next Up — Packaging <span class="hint">Enter units to mark finished</span></div>
+      <div id="packagingList"></div>
+    </section>
+
+    <!-- FINISHED VIEW -->
+    <section class="view" id="view-finished">
+      <div class="view-title">Finished Today <span class="hint" id="finishedTotalUnits"></span></div>
+      <div id="finishedList"></div>
+    </section>
+
+    <!-- INVENTORY REFERENCE VIEW -->
+    <section class="view" id="view-inventory">
+      <div class="view-title">Inventory Sheet Reference <span class="hint">Read-only pull — for reference only</span></div>
+      <div id="inventoryTableWrap" class="empty-state"><span class="big">📋</span>No inventory data pulled yet. Tap Sync or check Settings.</div>
+    </section>
+
+    <!-- QUALITY VIEW (stub) -->
+    <section class="view" id="view-quality">
+      <div class="view-title">Quality Checks <span class="hint">Manual pass/fail log — session only</span></div>
+      <div id="qualityCandidates"></div>
+      <div class="settings-section"><h3>Recent Checks</h3><div id="qualityLog" class="empty-state"><span class="big">🔍</span>No checks logged yet this shift.</div></div>
+    </section>
+
+    <!-- HELP VIEW (stub) -->
+    <section class="view" id="view-help">
+      <div class="view-title">Request Help <span class="hint">Flag a station — session only</span></div>
+      <div id="helpOpenList"></div>
+      <div class="settings-section"><h3>Flag a Station</h3><div id="helpStationGrid" style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px;"></div></div>
+    </section>
+
+    <!-- TRAINING VIEW (stub) -->
+    <section class="view" id="view-training">
+      <div class="view-title">Training Reference <span class="hint">Placeholder content — swap in your real SOPs</span></div>
+      <div id="trainingList"></div>
+    </section>
+  </main>
+</div>
+
+<!-- Settings modal -->
+<div class="modal hidden" id="settingsModal">
+  <div class="modal-sheet">
+    <div class="modal-head"><h2>Settings</h2><button class="close-x" data-close="settingsModal">&times;</button></div>
+
+    <div class="settings-section" style="border-top:none; margin-top:0;">
+      <h3>Shift Targets</h3>
+      <div class="field">
+        <label>Daily Goal Override (units)</label>
+        <input type="number" id="cfgDailyGoal" placeholder="Leave blank = auto from today's meals">
+        <div class="help" id="cfgDailyGoalAutoHint"></div>
+      </div>
+      <div class="field">
+        <label>Target Rate Override (units/hr)</label>
+        <input type="number" id="cfgTargetRate" placeholder="Leave blank = auto from today's meals">
+        <div class="help" id="cfgTargetRateAutoHint"></div>
+      </div>
+      <div class="field"><label>Planned Shift Length (hours)</label><input type="number" id="cfgPlannedHours">
+        <div class="help">Used only to judge "ahead/behind schedule" against Shift Start Time.</div>
+      </div>
+      <div class="field"><label>Shift Start Time</label><input type="time" id="cfgShiftStart"></div>
+    </div>
+
+    <div class="settings-section">
+      <h3>Station Assignments Sheet</h3>
+      <div class="field"><label>Google Sheet ID</label><input type="text" id="cfgStationSheetId"></div>
+      <div class="field"><label>Today's Tab (gid)</label><input type="text" id="cfgStationGid">
+        <div class="help">Open today's dated tab, copy the number after <code>gid=</code> in the URL. Changes every day.</div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h3>Inventory Sheet</h3>
+      <div class="field"><label>Google Sheet ID</label><input type="text" id="cfgInventorySheetId"></div>
+      <div class="field"><label>Today's Tab (gid)</label><input type="text" id="cfgInventoryGid"></div>
+    </div>
+
+    <div class="settings-section">
+      <button class="btn primary full" id="btnApplySettings">Save &amp; Sync Now</button>
+      <div class="help" style="margin-top:8px;">Both sheets must be shared as "Anyone with the link — Viewer". Nothing here ever writes back to either sheet.</div>
+    </div>
+
+    <div class="settings-section">
+      <h3>Manual Paste Fallback</h3>
+      <div class="field"><label>Station Assignments CSV</label><textarea id="cfgStationCsvPaste" placeholder="Paste CSV here"></textarea></div>
+      <div class="field"><label>Inventory CSV</label><textarea id="cfgInventoryCsvPaste" placeholder="Paste CSV here"></textarea></div>
+      <button class="btn outline full" id="btnUseManualCsv">Use Pasted CSV Instead</button>
+    </div>
+
+    <div class="settings-section">
+      <h3>Danger Zone</h3>
+      <button class="btn outline full" id="btnResetShift" style="color:var(--red); border-color:var(--red);">Reset All Progress (start new shift)</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     CONFIG
+  ============================================================ */
+  var config = {
+    stationSheetId: "1RPMZIlTlZtSXQYDb-cjGUbSeeamiHcYNCaV6DglGiJM",
+    stationGid: "555392155",
+    inventorySheetId: "1VSNtHtIN87bMrQlfFUPvaSQqGQWE9g6hAu0EgXAGVsU",
+    inventoryGid: "1563059118",
+    // Daily Goal / Target Rate are auto-computed from today's synced meal
+    // list × historical per-meal averages (see MEAL_HISTORY below). Set
+    // either override to a number in Settings to pin it manually instead;
+    // leave as null to keep auto-calculating from the meal mix.
+    dailyGoalOverride: null,
+    targetRateOverride: null,
+    plannedShiftHours: 8,
+    shiftStartTime: (function(){ var d = new Date(); d.setSeconds(0,0); return d; })()
+  };
+
+  /* ============================================================
+     MEAL HISTORY — computed once from this week's actual production
+     data (Station Assignment start/end times matched to Inventory's
+     "Added to Shopify" packaging timestamp, per meal + batch #).
+     Used to: (1) prefill a sensible Batch Target the first time a meal
+     loads, and (2) compute an auto Daily Goal / Target Rate from
+     today's real meal mix instead of one flat guessed number.
+     Keys are normalized meal names (lowercase, non-alphanumeric
+     collapsed to spaces) so lookups are resilient to minor punctuation
+     differences between sheets.
+  ============================================================ */
+  var MEAL_HISTORY = {"brookfield chicken bowl":{"avgUnits":343.0,"avgRatePerHour":153.5,"avgTotalMinutes":132.8,"runs":2},"buffalo crispy chicken wrap":{"avgUnits":294.0,"avgRatePerHour":147.6,"avgTotalMinutes":99.1,"runs":2},"grilled chicken parmesan wrap":{"avgUnits":192.5,"avgRatePerHour":47.6,"avgTotalMinutes":258.9,"runs":2},"broritto burrito":{"avgUnits":411.0,"avgRatePerHour":82.1,"avgTotalMinutes":297.6,"runs":2},"club wrap":{"avgUnits":183.5,"avgRatePerHour":91.6,"avgTotalMinutes":119.3,"runs":2},"southwest chicken bowl":{"avgUnits":337.5,"avgRatePerHour":191.6,"avgTotalMinutes":105.7,"runs":2},"baja chicken tacos":{"avgUnits":361.0,"avgRatePerHour":98.6,"avgTotalMinutes":216.4,"runs":2},"hey arnold burrito":{"avgUnits":239.5,"avgRatePerHour":59.5,"avgTotalMinutes":245.7,"runs":2},"farfalle chicken alfredo":{"avgUnits":303.0,"avgRatePerHour":140.7,"avgTotalMinutes":128.6,"runs":2},"stacked and jacked":{"avgUnits":198.0,"avgRatePerHour":144.0,"avgTotalMinutes":85.5,"runs":2},"spicy buffalo wrap":{"avgUnits":289.0,"avgRatePerHour":133.5,"avgTotalMinutes":126.7,"runs":2},"fit ala vodka with chicken":{"avgUnits":332.0,"avgRatePerHour":104.2,"avgTotalMinutes":211.0,"runs":2},"soho steak bowl":{"avgUnits":258.5,"avgRatePerHour":179.4,"avgTotalMinutes":86.5,"runs":2},"arnold 2022 bowl":{"avgUnits":289.0,"avgRatePerHour":117.9,"avgTotalMinutes":156.0,"runs":2},"buffalo chicken meatballs":{"avgUnits":252.0,"avgRatePerHour":129.1,"avgTotalMinutes":132.2,"runs":2},"fit fil a":{"avgUnits":150.5,"avgRatePerHour":128.2,"avgTotalMinutes":73.3,"runs":2},"thai chili chicken":{"avgUnits":260.0,"avgRatePerHour":171.1,"avgTotalMinutes":85.8,"runs":2},"chipotle chicken 1lb competition approved":{"avgUnits":99.0,"avgRatePerHour":58.7,"avgTotalMinutes":101.3,"runs":2},"competition approved chicken kebab 1lb":{"avgUnits":69.0,"avgRatePerHour":58.1,"avgTotalMinutes":100.2,"runs":2},"competition approved grilled chicken 1lb":{"avgUnits":192.0,"avgRatePerHour":141.1,"avgTotalMinutes":72.7,"runs":2},"competition approved oven baked cod 1lb":{"avgUnits":40.5,"avgRatePerHour":46.8,"avgTotalMinutes":76.2,"runs":2},"competition approved sticky rice 1lb":{"avgUnits":80.0,"avgRatePerHour":70.7,"avgTotalMinutes":97.6,"runs":2},"meatball parmesan wrap":{"avgUnits":161.5,"avgRatePerHour":64.2,"avgTotalMinutes":156.5,"runs":2},"gluten free carbonara chicken":{"avgUnits":314.0,"avgRatePerHour":83.8,"avgTotalMinutes":224.9,"runs":1},"texmex potato hash":{"avgUnits":340.0,"avgRatePerHour":144.8,"avgTotalMinutes":140.9,"runs":1},"crispy vegan wrap":{"avgUnits":98.0,"avgRatePerHour":127.0,"avgTotalMinutes":46.3,"runs":1},"grilled chicken pesto wrap":{"avgUnits":232.0,"avgRatePerHour":95.3,"avgTotalMinutes":146.1,"runs":1},"hot honey steak mac":{"avgUnits":276.0,"avgRatePerHour":97.9,"avgTotalMinutes":169.2,"runs":1},"bbq chicken garlic parm potatoes":{"avgUnits":754.0,"avgRatePerHour":136.4,"avgTotalMinutes":331.6,"runs":1},"vegan cheeseburger bowl":{"avgUnits":53.0,"avgRatePerHour":88.6,"avgTotalMinutes":35.9,"runs":1},"southwest chicken quesadilla":{"avgUnits":379.0,"avgRatePerHour":97.6,"avgTotalMinutes":233.1,"runs":1},"glorious gains steak bites cilantro lime rice":{"avgUnits":338.0,"avgRatePerHour":162.5,"avgTotalMinutes":124.8,"runs":1},"turkey bacon cheddar egg muffins":{"avgUnits":115.0,"avgRatePerHour":39.4,"avgTotalMinutes":175.1,"runs":1},"crispy baked chicken wrap":{"avgUnits":508.0,"avgRatePerHour":104.1,"avgTotalMinutes":292.9,"runs":1},"herb butter steak tips bowl":{"avgUnits":152.0,"avgRatePerHour":139.8,"avgTotalMinutes":65.2,"runs":1},"buffalo chicken quesadilla":{"avgUnits":410.0,"avgRatePerHour":109.3,"avgTotalMinutes":225.1,"runs":1},"low carb keto cheeseburger bowl":{"avgUnits":173.0,"avgRatePerHour":115.2,"avgTotalMinutes":90.1,"runs":1},"bbq meltdown":{"avgUnits":285.0,"avgRatePerHour":153.8,"avgTotalMinutes":111.2,"runs":1},"hfit signature fold":{"avgUnits":248.0,"avgRatePerHour":73.3,"avgTotalMinutes":203.0,"runs":1},"competition approved lemon pepper salmon 1lb":{"avgUnits":25.0,"avgRatePerHour":12.9,"avgTotalMinutes":116.4,"runs":1},"keto ricotta meatballs":{"avgUnits":132.0,"avgRatePerHour":131.0,"avgTotalMinutes":60.5,"runs":1},"the clean bulk pasta bowl":{"avgUnits":57.0,"avgRatePerHour":23.8,"avgTotalMinutes":143.5,"runs":1},"buffalo mac n chicken":{"avgUnits":320.0,"avgRatePerHour":178.6,"avgTotalMinutes":107.5,"runs":1},"nacho average bowl":{"avgUnits":192.0,"avgRatePerHour":193.8,"avgTotalMinutes":59.4,"runs":1},"cinnamon roll pancakes":{"avgUnits":78.0,"avgRatePerHour":28.2,"avgTotalMinutes":165.9,"runs":1},"taco build quesadilla":{"avgUnits":246.0,"avgRatePerHour":47.9,"avgTotalMinutes":308.4,"runs":1},"strongsville chicken ranch fold":{"avgUnits":168.0,"avgRatePerHour":86.7,"avgTotalMinutes":116.3,"runs":1},"vegan breakfast sandwich":{"avgUnits":16.0,"avgRatePerHour":22.6,"avgTotalMinutes":42.5,"runs":1},"baked herbed tilapia 1lb competition approved":{"avgUnits":15.0,"avgRatePerHour":48.9,"avgTotalMinutes":18.4,"runs":1},"chicken mushroom pot stickers":{"avgUnits":156.0,"avgRatePerHour":73.4,"avgTotalMinutes":127.5,"runs":1},"strawberry protein french toast":{"avgUnits":215.0,"avgRatePerHour":137.2,"avgTotalMinutes":94.0,"runs":1},"blueberry french toast":{"avgUnits":202.0,"avgRatePerHour":270.7,"avgTotalMinutes":44.8,"runs":1},"cheeseburger bowl":{"avgUnits":272.0,"avgRatePerHour":193.6,"avgTotalMinutes":84.3,"runs":1}};
+  var MEAL_HISTORY_FALLBACK = {"avgUnits":229.5,"avgRatePerHour":100.3,"avgTotalMinutes":137.3};
+
+  function normKey(s){ return (s||"").toString().toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+  function getMealHistory(mealName){ return MEAL_HISTORY[normKey(mealName)] || null; }
+
+  // In-memory only for the whole session — no localStorage/sessionStorage.
+  var state = {
+    meals: [],
+    stations: {},
+    inventoryRows: [],
+    lastSyncTime: null,
+    syncOk: false,
+    activeStation: null,
+    qualityLog: [],       // {mealName, station, result, note, time}
+    helpRequests: [],     // {station, time}
+    trainingDone: {}       // id -> bool
+  };
+
+  var STAGE_LABEL = { not_started:"Not Started", in_progress:"In Progress", packaging:"Next Up — Packaging", finished:"Finished" };
+  var STAGE_CLASS = { not_started:"notstarted", in_progress:"inprogress", packaging:"packaging", finished:"finished" };
+
+  var TRAINING_ITEMS = [
+    { id:"t1", text:"Wash and sanitize hands before starting any station." },
+    { id:"t2", text:"Confirm batch weight/portion size against the recipe card before packaging." },
+    { id:"t3", text:"Check allergen labels match the meal being packaged." },
+    { id:"t4", text:"Report any equipment issue immediately via Request Help — do not keep running a faulty machine." },
+    { id:"t5", text:"Verify fridge temperature log before placing finished trays in cold storage." }
+  ];
+
+  /* ============================================================
+     CSV PARSING
+  ============================================================ */
+  function parseCSV(text){
+    var rows = []; var row = []; var field = ""; var inQuotes = false;
+    for(var i=0;i<text.length;i++){
+      var c = text[i];
+      if(inQuotes){
+        if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else { inQuotes = false; } }
+        else { field += c; }
+      } else {
+        if(c === '"'){ inQuotes = true; }
+        else if(c === ','){ row.push(field); field=""; }
+        else if(c === '\r'){ /* skip */ }
+        else if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=""; }
+        else { field += c; }
+      }
+    }
+    if(field.length || row.length){ row.push(field); rows.push(row); }
+    return rows;
+  }
+  function norm(s){ return (s||"").toString().trim(); }
+  function lower(s){ return norm(s).toLowerCase(); }
+
+  function findHeaderIndex(rows, mustHaveCol){
+    for(var i=0;i<rows.length;i++){
+      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]) === mustHaveCol){ return i; } }
+    }
+    return -1;
+  }
+  function buildColMap(headerRow){
+    var map = {};
+    headerRow.forEach(function(h,idx){
+      var key = lower(h).replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"");
+      if(key) map[key] = idx;
+    });
+    return map;
+  }
+  function col(row, map, key, fallbackIdx){
+    var idx = map[key];
+    if(idx === undefined) idx = fallbackIdx;
+    if(idx === undefined || idx < 0) return "";
+    return norm(row[idx]);
+  }
+
+  /* ============================================================
+     PARSE: Station Assignments tab
+  ============================================================ */
+  function parseStationSheet(csvText){
+    var rows = parseCSV(csvText);
+    var meals = [];
+    var stations = {};
+
+    var sumHeaderIdx = findHeaderIndex(rows, "station");
+    if(sumHeaderIdx > -1){
+      var sMap = buildColMap(rows[sumHeaderIdx]);
+      for(var i=sumHeaderIdx+1;i<rows.length;i++){
+        var r = rows[i];
+        var stCell = col(r, sMap, "station", 0);
+        var m = stCell.match(/station\s*(\d+)/i);
+        if(!m) { if(!stCell) continue; else break; }
+        var num = m[1];
+        stations[num] = {
+          employee1: col(r, sMap, "employee_1", 1),
+          employee2: col(r, sMap, "employee_2", 2),
+          notes: col(r, sMap, "notes", 4)
+        };
+      }
+    }
+
+    var headerIdx = findHeaderIndex(rows, "meal name");
+    if(headerIdx === -1) return { meals: meals, stations: stations };
+    var map = buildColMap(rows[headerIdx]);
+    var currentStationFromSeparator = "";
+    var orderCounter = 0;
+
+    for(var i2=headerIdx+1;i2<rows.length;i2++){
+      var row = rows[i2];
+      var first = norm(row[0]);
+      if(!first) continue;
+      if(/^summary/i.test(first)) break;
+      if(/^station\s*\d+/i.test(first) || /^meals packaged/i.test(first)){
+        var sm = first.match(/station\s*(\d+)/i);
+        currentStationFromSeparator = sm ? sm[1] : currentStationFromSeparator;
+        continue;
+      }
+      if(/^\(.*\)$/.test(first)) continue;
+
+      var mealName = first;
+      var stationAssigned = col(row, map, "station_assigned", 2) || currentStationFromSeparator;
+      var batchNum = col(row, map, "batch", 1);
+      var emp1 = col(row, map, "employee_1", 3);
+      var emp2 = col(row, map, "employee_2", 4);
+      var eligible = col(row, map, "eligible_stations", row.length-1);
+      var notes = col(row, map, "notes", 10);
+
+      meals.push({
+        mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned",
+        employees: [emp1, emp2].filter(Boolean), eligibleStations: eligible, sourceNotes: notes,
+        order: orderCounter++
+      });
+    }
+    return { meals: meals, stations: stations };
+  }
+
+  function parseInventorySheet(csvText){
+    var rows = parseCSV(csvText);
+    var headerIdx = findHeaderIndex(rows, "meal name");
+    if(headerIdx === -1) return [];
+    var map = buildColMap(rows[headerIdx]);
+    var out = [];
+    for(var i=headerIdx+1;i<rows.length;i++){
+      var row = rows[i]; var name = norm(row[0]);
+      if(!name) continue;
+      if(/^total meals packed/i.test(name)) break;
+      out.push({
+        mealName: name, batchNum: col(row, map, "batch", 1), packaging: col(row, map, "packaging", 2),
+        machineCrewUnits: col(row, map, "machine_crew_units", 4), fridgeVerified: col(row, map, "fridge_verified", 5),
+        addedToShopify: col(row, map, "added_to_shopify", 6)
+      });
+    }
+    return out;
+  }
+
+  /* ============================================================
+     MERGE
+  ============================================================ */
+  function mealKey(m){ return [lower(m.mealName), norm(m.batchNum), norm(m.station)].join("::"); }
+
+  function mergeMeals(freshList){
+    var existingByKey = {};
+    state.meals.forEach(function(m){ existingByKey[mealKey(m)] = m; });
+    var merged = []; var seen = {};
+    freshList.forEach(function(fm){
+      var key = mealKey(fm); seen[key] = true;
+      if(existingByKey[key]){
+        var ex = existingByKey[key];
+        ex.eligibleStations = fm.eligibleStations; ex.sourceNotes = fm.sourceNotes; ex.employees = fm.employees; ex.order = fm.order;
+        merged.push(ex);
+      } else {
+        // First time we've seen this meal/batch: prefill Batch Target from
+        // its historical average units so "Remaining" is meaningful right
+        // away, instead of starting blank. Staff can still edit it freely —
+        // this is just a starting estimate, not a locked value.
+        var hist = getMealHistory(fm.mealName);
+        merged.push({
+          id: key + "::" + Math.floor(Math.random()*1e9),
+          mealName: fm.mealName, batchNum: fm.batchNum, station: fm.station, employees: fm.employees,
+          eligibleStations: fm.eligibleStations, sourceNotes: fm.sourceNotes, order: fm.order,
+          startTime: null, endTime: null, stationUnits: 0,
+          batchTarget: hist ? Math.round(hist.avgUnits) : null,
+          batchTargetIsEstimate: !!hist,
+          packagingUnits: null, finishedTime: null
+        });
+      }
+    });
+    state.meals.forEach(function(m){ var key = mealKey(m); if(!seen[key]) merged.push(m); });
+    state.meals = merged;
+  }
+
+  /* ============================================================
+     STAGE — computed purely from data fields.
+  ============================================================ */
+  function getStage(m){
+    if(m.packagingUnits != null && m.packagingUnits !== "") return "finished";
+    if(m.endTime) return "packaging";
+    if(m.startTime) return "in_progress";
+    return "not_started";
+  }
+  function recomputeStages(){ state.meals.forEach(function(m){ m.stage = getStage(m); }); }
+
+  /* ============================================================
+     FETCH
+  ============================================================ */
+  function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/gviz/tq?tqx=out:csv&gid=" + gid; }
+  function setSyncStatus(mode, text){
+    var el = document.getElementById("syncStatus"); el.className = mode;
+    document.getElementById("syncStatusText").textContent = text;
+  }
+  function syncNow(){
+    setSyncStatus("syncing", "Syncing…");
+    var stationUrl = csvUrl(config.stationSheetId, config.stationGid);
+    var invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
+    Promise.all([
+      fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed"); return r.text(); }),
+      fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed"); return r.text(); })
+    ]).then(function(results){
+      applyStationCsv(results[0]); applyInventoryCsv(results[1]);
+      state.lastSyncTime = new Date(); state.syncOk = true;
+      setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime));
+      renderAll(); showToast("Synced from Google Sheets");
+    }).catch(function(err){
+      state.syncOk = false;
+      setSyncStatus("offline", "Sync failed — check Settings / sharing");
+      showToast("Sync failed. Check sheet sharing settings or use manual paste in Settings.");
+      console.error(err);
+    });
+  }
+  function applyStationCsv(csvText){
+    var parsed = parseStationSheet(csvText);
+    mergeMeals(parsed.meals); state.stations = parsed.stations; recomputeStages();
+  }
+  function applyInventoryCsv(csvText){ state.inventoryRows = parseInventorySheet(csvText); }
+
+  /* ============================================================
+     ACTIONS — only ever mutate raw fields; stage is derived.
+  ============================================================ */
+  function findMeal(id){ return state.meals.filter(function(m){ return m.id === id; })[0]; }
+
+  function startBatch(id){
+    var m = findMeal(id); if(!m || m.startTime) return;
+    m.startTime = new Date(); recomputeStages(); renderAll();
+  }
+  function clearStart(id){
+    var m = findMeal(id); if(!m) return;
+    m.startTime = null; m.endTime = null; m.stationUnits = 0; m.packagingUnits = null; m.finishedTime = null;
+    recomputeStages(); renderAll();
+  }
+  function addUnits(id, n){
+    var m = findMeal(id); if(!m || m.stage !== "in_progress") return;
+    m.stationUnits = (m.stationUnits||0) + n;
+    renderAll();
+  }
+  function resetStationUnits(id){
+    var m = findMeal(id); if(!m) return;
+    m.stationUnits = 0; renderAll();
+  }
+  function setBatchTarget(id, val){
+    var m = findMeal(id); if(!m) return;
+    var n = parseInt(val,10);
+    m.batchTarget = isNaN(n) ? null : n;
+    m.batchTargetIsEstimate = false; // manual edit overrides the historical estimate
+    renderAll();
+  }
+  function completeBatch(id){
+    var m = findMeal(id); if(!m) return;
+    if(!m.startTime){ showToast("Start the batch before completing it"); return; }
+    if(m.endTime) return;
+    m.endTime = new Date();
+    m.suggestedUnits = m.stationUnits || 0;
+    recomputeStages(); renderAll(); switchView("packaging");
+  }
+  function clearEnd(id){
+    var m = findMeal(id); if(!m) return;
+    m.endTime = null; m.packagingUnits = null; m.finishedTime = null;
+    recomputeStages(); renderAll();
+  }
+  function confirmPackaging(id, units){
+    var m = findMeal(id); if(!m) return;
+    if(!m.endTime){ showToast("End prep before entering packaging units"); return; }
+    var n = parseInt(units,10);
+    if(isNaN(n) || n < 0){ showToast("Enter a valid unit count first"); return; }
+    m.packagingUnits = n; m.finishedTime = new Date();
+    recomputeStages(); renderAll();
+  }
+  function clearUnits(id){
+    var m = findMeal(id); if(!m) return;
+    m.packagingUnits = null; m.finishedTime = null;
+    recomputeStages(); renderAll();
+  }
+  function editFinishedUnits(id){
+    var m = findMeal(id); if(!m) return;
+    var val = prompt("Update units packaged for \"" + m.mealName + "\":", m.packagingUnits != null ? m.packagingUnits : "");
+    if(val === null) return;
+    var n = parseInt(val,10);
+    if(isNaN(n) || n < 0){ showToast("Enter a valid number"); return; }
+    m.packagingUnits = n; recomputeStages(); renderAll();
+  }
+
+  /* ============================================================
+     RENDER helpers
+  ============================================================ */
+  function formatTime(d){ if(!d) return ""; return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
+  function escapeHtml(s){
+    return (s==null?"":String(s)).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
+  }
+  var toastTimer;
+  function showToast(msg){
+    var t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 3200);
+  }
+  function openModal(id){ document.getElementById(id).classList.remove("hidden"); }
+  function closeModal(id){ document.getElementById(id).classList.add("hidden"); }
+  function switchView(name){
+    document.querySelectorAll(".view").forEach(function(v){ v.classList.remove("active"); });
+    document.getElementById("view-"+name).classList.add("active");
+    document.querySelectorAll("nav#tabs button").forEach(function(b){ b.classList.toggle("active", b.getAttribute("data-view") === name); });
+  }
+  function stationsSorted(){
+    return Object.keys(state.stations).concat(state.meals.map(function(m){ return m.station; }))
+      .filter(function(v,i,a){ return v && a.indexOf(v)===i; })
+      .sort(function(a,b){ var na=parseInt(a,10), nb=parseInt(b,10); if(!isNaN(na)&&!isNaN(nb)) return na-nb; return String(a).localeCompare(String(b)); });
+  }
+  function mealsForStation(stNum){ return state.meals.filter(function(m){ return String(m.station) === String(stNum); }).sort(function(a,b){ return (a.order||0)-(b.order||0); }); }
+
+  /* ============================================================
+     KPI computation (shift-wide)
+  ============================================================ */
+  // Auto Daily Goal / Target Rate: for every meal currently synced from
+  // today's Station Assignments tab, look up its historical avg units and
+  // avg start-to-packaged minutes (falling back to the overall average
+  // across all observed meals if this specific one has no history yet).
+  // Summing units and summing minutes across today's actual meal list
+  // gives a goal and a target pace that reflect today's real mix, instead
+  // of one flat number that's wrong the moment the meal lineup changes.
+  function computeAutoGoalAndRate(){
+    var totalUnits = 0, totalMinutes = 0, matchedCount = 0;
+    state.meals.forEach(function(m){
+      var h = getMealHistory(m.mealName);
+      var units = h ? h.avgUnits : MEAL_HISTORY_FALLBACK.avgUnits;
+      var mins = h ? h.avgTotalMinutes : MEAL_HISTORY_FALLBACK.avgTotalMinutes;
+      totalUnits += units; totalMinutes += mins;
+      if(h) matchedCount++;
+    });
+    var targetRate = totalMinutes > 0 ? (totalUnits / (totalMinutes/60)) : 0;
+    return {
+      autoGoal: Math.round(totalUnits),
+      autoTargetRate: Math.round(targetRate),
+      mealCount: state.meals.length,
+      matchedCount: matchedCount
+    };
+  }
+
+  function computeKpis(){
+    var finished = state.meals.filter(function(m){ return m.stage === "finished"; });
+    var completed = finished.reduce(function(s,m){ return s + (m.packagingUnits||0); }, 0);
+    var auto = computeAutoGoalAndRate();
+    var goal = (config.dailyGoalOverride != null) ? config.dailyGoalOverride : auto.autoGoal;
+    var targetRate = (config.targetRateOverride != null) ? config.targetRateOverride : auto.autoTargetRate;
+    var progressPct = goal > 0 ? Math.min(100, Math.round(completed/goal*100)) : 0;
+    var now = new Date();
+    var elapsedHours = Math.max((now - config.shiftStartTime) / 3600000, 1/60);
+    var rate = completed / elapsedHours;
+    var remaining = Math.max(goal - completed, 0);
+    var estFinish = rate > 0 ? new Date(now.getTime() + (remaining/rate)*3600000) : null;
+    var scheduledFinish = new Date(config.shiftStartTime.getTime() + config.plannedShiftHours*3600000);
+    var deltaMinutes = estFinish ? Math.round((scheduledFinish - estFinish)/60000) : null;
+    return {
+      completed:completed, goal:goal, progressPct:progressPct, rate:Math.round(rate), targetRate:Math.round(targetRate),
+      estFinish:estFinish, deltaMinutes:deltaMinutes,
+      goalIsAuto: config.dailyGoalOverride == null, targetRateIsAuto: config.targetRateOverride == null,
+      mealCount: auto.mealCount, matchedCount: auto.matchedCount
+    };
+  }
+
+  function renderKpis(){
+    var k = computeKpis();
+    document.getElementById("kpiCompleted").textContent = k.completed.toLocaleString();
+    document.getElementById("kpiGoal").textContent = k.goal.toLocaleString() + (k.goalIsAuto ? " (auto)" : "");
+    document.getElementById("kpiProgress").textContent = k.progressPct + "%";
+    document.getElementById("kpiRate").textContent = k.rate + "/hr";
+    document.getElementById("kpiTargetRate").textContent = k.targetRate + (k.targetRateIsAuto ? " (auto)" : "");
+    document.getElementById("kpiFinish").textContent = k.estFinish ? formatTime(k.estFinish) : "--:--";
+    document.getElementById("goalCurrent").textContent = k.completed.toLocaleString();
+    document.getElementById("goalTotal").textContent = k.goal.toLocaleString() + (k.goalIsAuto ? " (auto from " + k.mealCount + " meals, " + k.matchedCount + " with history)" : "");
+    document.getElementById("goalBarFill").style.width = k.progressPct + "%";
+
+    var progSub = document.getElementById("kpiProgressSub");
+    var finSub = document.getElementById("kpiFinishSub");
+    var statusText;
+    if(k.deltaMinutes == null){ statusText = "Not enough data yet"; progSub.className = "kpi-sub"; finSub.className="kpi-sub"; }
+    else if(Math.abs(k.deltaMinutes) <= 5){ statusText = "On schedule"; progSub.className = "kpi-sub good"; finSub.className="kpi-sub good"; }
+    else if(k.deltaMinutes > 0){ statusText = k.deltaMinutes + " min ahead"; progSub.className = "kpi-sub good"; finSub.className="kpi-sub good"; }
+    else { statusText = Math.abs(k.deltaMinutes) + " min behind"; progSub.className = "kpi-sub bad"; finSub.className="kpi-sub bad"; }
+    progSub.textContent = statusText;
+    finSub.textContent = statusText;
+    document.getElementById("sumShiftStatus").textContent = statusText;
+  }
+
+  /* ============================================================
+     RENDER: Production tab
+  ============================================================ */
+  function renderSummaryCounts(){
+    var counts = {not_started:0, in_progress:0, packaging:0, finished:0};
+    state.meals.forEach(function(m){ counts[m.stage] = (counts[m.stage]||0)+1; });
+    document.getElementById("cntStations").textContent = stationsSorted().length;
+    document.getElementById("cntPackaging").textContent = counts.packaging;
+    document.getElementById("cntFinished").textContent = counts.finished;
+    document.getElementById("cntHelp").textContent = state.helpRequests.length;
+    document.getElementById("sumOpenRequests").textContent = state.helpRequests.length;
+    var lastQ = state.qualityLog[0];
+    document.getElementById("sumLastQuality").textContent = lastQ ? formatTime(lastQ.time) : "—";
+  }
+
+  function renderStationGrid(){
+    var grid = document.getElementById("stationGrid");
+    var stNums = stationsSorted();
+    if(!stNums.length){
+      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><span class="big">🔌</span>No station data yet. Tap Sync or check Settings.</div>';
+      return;
+    }
+    grid.innerHTML = stNums.map(function(st){
+      var info = state.stations[st] || {};
+      var meals = mealsForStation(st);
+      var counts = {not_started:0,in_progress:0,packaging:0,finished:0};
+      meals.forEach(function(m){ counts[m.stage]++; });
+      var crew = [info.employee1, info.employee2].filter(Boolean).join(" & ") || "Unassigned crew";
+      var badges = "";
+      if(counts.in_progress) badges += '<span class="badge inprogress">'+counts.in_progress+' Running</span>';
+      if(counts.packaging) badges += '<span class="badge packaging">'+counts.packaging+' Packaging</span>';
+      if(counts.finished) badges += '<span class="badge finished">'+counts.finished+' Finished</span>';
+      if(!badges) badges = '<span class="badge notstarted">'+meals.length+' Not Started</span>';
+      return '<button class="station-card" data-station="'+escapeHtml(st)+'">'
+        + '<div class="st-num">STATION '+escapeHtml(st)+'</div>'
+        + '<div class="st-crew">'+escapeHtml(crew)+'</div>'
+        + '<div class="st-badges">'+badges+'</div>'
+        + '<div class="st-meals">'+meals.length+' meal'+(meals.length===1?'':'s')+' assigned</div>'
+        + '</button>';
+    }).join("");
+  }
+
+  function pickCurrentMeal(meals){
+    var inProgress = meals.filter(function(m){ return m.stage === "in_progress"; });
+    if(inProgress.length) return inProgress[0];
+    var packaging = meals.filter(function(m){ return m.stage === "packaging"; });
+    if(packaging.length) return packaging[0];
+    var notStarted = meals.filter(function(m){ return m.stage === "not_started"; });
+    if(notStarted.length) return notStarted[0];
+    return null;
+  }
+
+  function renderStationPanel(stNum){
+    var info = state.stations[stNum] || {};
+    var meals = mealsForStation(stNum);
+    var crewLine = [info.employee1, info.employee2].filter(Boolean).join(" & ");
+    var current = pickCurrentMeal(meals);
+    var body = "";
+
+    if(!meals.length){
+      body = '<div class="panel-card"><div class="empty-state"><span class="big">🍽️</span>No meals found for Station '+escapeHtml(stNum)+' in the latest sync.</div></div>';
+    } else if(!current){
+      var finishedCount = meals.filter(function(m){ return m.stage==="finished"; }).length;
+      body = '<div class="panel-card"><div class="panel-head"><h2>Station '+escapeHtml(stNum)+'</h2><span class="pill-status finished">All Done</span></div>'
+        + (crewLine? '<div class="panel-meal-name">Crew: '+escapeHtml(crewLine)+'</div>' : '')
+        + '<div class="empty-state"><span class="big">✅</span>All '+finishedCount+' meal(s) for this station are finished.</div></div>';
+    } else {
+      var idx = meals.indexOf(current);
+      var next = meals.slice(idx+1).filter(function(m){ return m.stage === "not_started"; })[0];
+      var remaining = current.batchTarget != null ? Math.max(current.batchTarget - (current.stationUnits||0), 0) : null;
+
+      var stageActions = "";
+      if(current.stage === "not_started"){
+        stageActions = '<div class="btn-row"><button class="btn primary full" data-action="startBatch" data-id="'+current.id+'">▶ Start Batch</button></div>';
+      } else if(current.stage === "in_progress"){
+        stageActions = '<div class="btn-row" style="margin-bottom:10px;">'
+          + '<button class="btn primary" data-action="addUnits" data-id="'+current.id+'" data-amt="50">Add 50 Completed</button>'
+          + '<button class="btn outline" data-action="addUnitsCustom" data-id="'+current.id+'">+ Custom Amount</button>'
+          + '</div>'
+          + '<div class="btn-row"><button class="btn green full" data-action="completeBatch" data-id="'+current.id+'">✓ Complete Current Batch</button></div>'
+          + '<div class="stamp-row"><span class="stamp-text">Started '+formatTime(current.startTime)+'</span>'
+          + '<button class="clear-x" data-action="clearStart" data-id="'+current.id+'" title="Back to Not Started">✕</button></div>';
+      } else if(current.stage === "packaging"){
+        stageActions = '<div class="empty-state" style="padding:20px;"><span class="big">📦</span>Sent to the Packaging queue'+(current.suggestedUnits!=null?' with '+current.suggestedUnits+' units logged at the station':'')+'. Enter final packaged units from the Packaging tab.</div>'
+          + '<div class="btn-row"><button class="btn outline full" data-action="gotoPackaging">Open Packaging Queue</button></div>'
+          + '<div class="stamp-row"><span class="stamp-text">Ended '+formatTime(current.endTime)+'</span>'
+          + '<button class="clear-x" data-action="clearEnd" data-id="'+current.id+'" title="Back to In Progress">✕</button></div>';
+      }
+
+      body = '<div class="panel-card">'
+        + '<div class="panel-head"><div><h2>Current Meal</h2></div><span class="pill-status '+STAGE_CLASS[current.stage]+'">'+(current.stage==='in_progress'?'Line Running':STAGE_LABEL[current.stage])+'</span></div>'
+        + '<div class="panel-meal-name">'+escapeHtml(current.mealName)+(crewLine?' · '+escapeHtml(crewLine):'')+'</div>'
+        + '<div class="stat-row">'
+        + '<div class="stat-box"><div class="stat-label">Batch Target'+(current.batchTargetIsEstimate?' <span style="color:var(--blue); font-weight:700;">(est.)</span>':'')+'</div><input class="target-input" type="number" min="0" placeholder="—" value="'+(current.batchTarget!=null?current.batchTarget:'')+'" data-action="setTarget" data-id="'+current.id+'"></div>'
+        + '<div class="stat-box"><div class="stat-label">Units So Far</div><div class="stat-value">'+(current.stationUnits||0)+'</div></div>'
+        + '<div class="stat-box"><div class="stat-label">Next Meal</div><div class="stat-value" style="font-size:14px; font-weight:700;">'+(next?escapeHtml(next.mealName):'—')+'</div></div>'
+        + '</div>'
+        + (remaining!=null ? '<div class="meal-meta" style="margin-bottom:10px;">Remaining to target: <b>'+remaining+'</b></div>' : '')
+        + stageActions
+        + '</div>';
+
+      if(meals.length > 1){
+        body += '<div class="settings-section" style="border-top:none;"><h3>All Meals — Station '+escapeHtml(stNum)+'</h3>'
+          + meals.map(function(m){
+              return '<div class="meal-card stage-'+m.stage+'"><div class="meal-head"><div><div class="meal-name">'+escapeHtml(m.mealName)+'</div>'
+                + '<div class="meal-meta">'+(m.batchNum?('Batch #'+escapeHtml(m.batchNum)):'')+'</div></div>'
+                + '<div class="meal-stage-label">'+STAGE_LABEL[m.stage]+'</div></div></div>';
+            }).join("")
+          + '</div>';
+      }
+    }
+    document.getElementById("panelBody").innerHTML = body;
+  }
+
+  function openStationPanel(stNum){
+    state.activeStation = stNum;
+    document.getElementById("productionGrid").style.display = "none";
+    document.getElementById("productionPanel").style.display = "block";
+    renderStationPanel(stNum);
+  }
+  function closeStationPanel(){
+    state.activeStation = null;
+    document.getElementById("productionGrid").style.display = "block";
+    document.getElementById("productionPanel").style.display = "none";
+  }
+
+  /* ============================================================
+     RENDER: Packaging / Finished / Inventory
+  ============================================================ */
+  function mealCardHtml(m){
+    var meta = [];
+    if(m.batchNum) meta.push("Batch #"+m.batchNum);
+    meta.push("Station "+m.station);
+    if(m.employees && m.employees.length) meta.push(m.employees.join(" & "));
+
+    var actions = "";
+    if(m.stage === "packaging"){
+      var prefill = m.suggestedUnits != null ? m.suggestedUnits : "";
+      actions = '<div class="units-row">'
+        + '<input type="number" min="0" inputmode="numeric" placeholder="Units" id="units-'+m.id+'" value="'+prefill+'">'
+        + '<button class="btn green" data-action="confirm" data-id="'+m.id+'">✓ Finish</button></div>'
+        + '<div class="stamp-row"><span class="stamp-text">Ended '+formatTime(m.endTime)+'</span>'
+        + '<button class="clear-x" data-action="clearEnd" data-id="'+m.id+'" title="Back to In Progress">✕</button></div>';
+    } else if(m.stage === "finished"){
+      actions = '<div class="stamp-row"><span class="stamp-text">'+(m.packagingUnits!=null?m.packagingUnits+' units':'')+(m.finishedTime?' · Finished '+formatTime(m.finishedTime):'')+'</span>'
+        + '<button class="edit-pencil" data-action="edit" data-id="'+m.id+'">edit</button>'
+        + '<button class="clear-x" data-action="clearUnits" data-id="'+m.id+'" title="Back to Packaging">✕</button></div>';
+    }
+    return '<div class="meal-card stage-'+m.stage+'" data-mealid="'+m.id+'">'
+      + '<div class="meal-head"><div><div class="meal-name">'+escapeHtml(m.mealName)+'</div>'
+      + '<div class="meal-meta">'+escapeHtml(meta.join(" · "))+'</div></div>'
+      + '<div class="meal-stage-label">'+STAGE_LABEL[m.stage]+'</div></div>' + actions + '</div>';
+  }
+
+  function renderPackagingView(){
+    var meals = state.meals.filter(function(m){ return m.stage === "packaging"; });
+    var wrap = document.getElementById("packagingList");
+    wrap.innerHTML = meals.length ? meals.map(mealCardHtml).join("") : '<div class="empty-state"><span class="big">📦</span>Nothing waiting on packaging right now.</div>';
+  }
+  function renderFinishedView(){
+    var meals = state.meals.filter(function(m){ return m.stage === "finished"; });
+    var wrap = document.getElementById("finishedList");
+    var totalUnits = meals.reduce(function(s,m){ return s+(m.packagingUnits||0); },0);
+    document.getElementById("finishedTotalUnits").textContent = meals.length ? (totalUnits+" units across "+meals.length+" meal(s)") : "";
+    wrap.innerHTML = meals.length ? meals.map(mealCardHtml).join("") : '<div class="empty-state"><span class="big">✅</span>No meals finished yet this shift.</div>';
+  }
+  function renderInventoryView(){
+    var wrap = document.getElementById("inventoryTableWrap");
+    if(!state.inventoryRows.length){
+      wrap.innerHTML = '<div class="empty-state"><span class="big">📋</span>No inventory data pulled yet. Tap Sync or check Settings.</div>';
+      return;
+    }
+    var rowsHtml = state.inventoryRows.map(function(r){
+      return '<tr><td>'+escapeHtml(r.mealName)+'</td><td>'+escapeHtml(r.batchNum)+'</td><td>'+escapeHtml(r.packaging)+'</td>'
+        + '<td>'+escapeHtml(r.machineCrewUnits)+'</td><td>'+escapeHtml(r.fridgeVerified)+'</td><td>'+escapeHtml(r.addedToShopify)+'</td></tr>';
+    }).join("");
+    wrap.innerHTML = '<div style="overflow-x:auto;"><table class="inv-table"><thead><tr><th>Meal</th><th>Batch</th><th>Packaging</th><th>Crew Units</th><th>Fridge ✓</th><th>Shopify</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
+  }
+
+  /* ============================================================
+     RENDER: Quality (stub)
+  ============================================================ */
+  function renderQualityView(){
+    var candidates = state.meals.filter(function(m){ return m.stage !== "not_started"; });
+    var wrap = document.getElementById("qualityCandidates");
+    wrap.innerHTML = candidates.length ? candidates.map(function(m){
+      return '<div class="q-row"><div class="meal-head"><div><div class="meal-name">'+escapeHtml(m.mealName)+'</div>'
+        + '<div class="meal-meta">Station '+escapeHtml(m.station)+' · '+STAGE_LABEL[m.stage]+'</div></div></div>'
+        + '<div class="q-actions">'
+        + '<button class="btn pass" data-action="qcheck" data-id="'+m.id+'" data-result="pass">✓ Pass</button>'
+        + '<button class="btn fail" data-action="qcheck" data-id="'+m.id+'" data-result="fail">✕ Fail</button>'
+        + '</div></div>';
+    }).join("") : '<div class="empty-state"><span class="big">🕐</span>No meals in progress or finished yet to check.</div>';
+
+    var logWrap = document.getElementById("qualityLog");
+    if(!state.qualityLog.length){
+      logWrap.innerHTML = '<div class="empty-state"><span class="big">🔍</span>No checks logged yet this shift.</div>';
+    } else {
+      logWrap.innerHTML = state.qualityLog.map(function(l){
+        return '<div class="log-entry"><span>'+formatTime(l.time)+' · '+escapeHtml(l.mealName)+' (St. '+escapeHtml(l.station)+')</span>'
+          + '<span class="meal-stage-label" style="background:'+(l.result==='pass'?'var(--green-tint)':'var(--red-tint)')+';color:'+(l.result==='pass'?'var(--green)':'var(--red)')+';">'+l.result.toUpperCase()+'</span></div>';
+      }).join("");
+    }
+  }
+  function logQualityCheck(id, result){
+    var m = findMeal(id); if(!m) return;
+    state.qualityLog.unshift({ mealName:m.mealName, station:m.station, result:result, time:new Date() });
+    renderAll(); showToast("Logged " + result.toUpperCase() + " for " + m.mealName);
+  }
+
+  /* ============================================================
+     RENDER: Help (stub)
+  ============================================================ */
+  function renderHelpView(){
+    var openWrap = document.getElementById("helpOpenList");
+    openWrap.innerHTML = state.helpRequests.length ? state.helpRequests.map(function(hr, idx){
+      return '<div class="q-row"><div class="meal-head"><div><div class="meal-name">Station '+escapeHtml(hr.station)+' needs help</div>'
+        + '<div class="meal-meta">Flagged '+formatTime(hr.time)+'</div></div>'
+        + '<button class="btn outline" data-action="resolveHelp" data-idx="'+idx+'" style="min-height:40px; padding:8px 14px; font-size:13px;">Resolve</button></div></div>';
+    }).join("") : '<div class="empty-state"><span class="big">🙌</span>No open requests right now.</div>';
+
+    var gridWrap = document.getElementById("helpStationGrid");
+    var stNums = stationsSorted();
+    gridWrap.innerHTML = stNums.map(function(st){
+      var flagged = state.helpRequests.some(function(hr){ return String(hr.station) === String(st); });
+      return '<button class="help-station-btn'+(flagged?' flagged':'')+'" data-action="flagHelp" data-station="'+escapeHtml(st)+'" '+(flagged?'disabled':'')+'>'
+        + (flagged ? '🆘 Station '+escapeHtml(st)+' (flagged)' : '🆘 Flag Station '+escapeHtml(st))
+        + '</button>';
+    }).join("");
+  }
+  function flagHelp(station){
+    if(state.helpRequests.some(function(hr){ return String(hr.station)===String(station); })) return;
+    state.helpRequests.push({ station:station, time:new Date() });
+    renderAll(); showToast("Station " + station + " flagged for help");
+  }
+  function resolveHelp(idx){
+    state.helpRequests.splice(idx,1); renderAll();
+  }
+
+  /* ============================================================
+     RENDER: Training (stub)
+  ============================================================ */
+  function renderTrainingView(){
+    var wrap = document.getElementById("trainingList");
+    wrap.innerHTML = TRAINING_ITEMS.map(function(t){
+      var done = !!state.trainingDone[t.id];
+      return '<div class="training-item'+(done?' done':'')+'"><input type="checkbox" data-action="toggleTraining" data-id="'+t.id+'" '+(done?'checked':'')+'>'
+        + '<div class="t-text">'+escapeHtml(t.text)+'</div></div>';
+    }).join("");
+  }
+
+  /* ============================================================
+     RENDER ALL
+  ============================================================ */
+  function renderAll(){
+    recomputeStages();
+    renderKpis();
+    renderSummaryCounts();
+    renderStationGrid();
+    if(state.activeStation) renderStationPanel(state.activeStation);
+    renderPackagingView();
+    renderFinishedView();
+    renderInventoryView();
+    renderQualityView();
+    renderHelpView();
+    renderTrainingView();
+  }
+
+  /* ============================================================
+     EVENTS
+  ============================================================ */
+  document.getElementById("tabs").addEventListener("click", function(e){
+    var btn = e.target.closest("button[data-view]");
+    if(btn) switchView(btn.getAttribute("data-view"));
+  });
+
+  document.getElementById("stationGrid").addEventListener("click", function(e){
+    var card = e.target.closest(".station-card");
+    if(card) openStationPanel(card.getAttribute("data-station"));
+  });
+  document.getElementById("btnBackToStations").addEventListener("click", closeStationPanel);
+
+  document.addEventListener("click", function(e){
+    var closeBtn = e.target.closest("[data-close]");
+    if(closeBtn){ closeModal(closeBtn.getAttribute("data-close")); return; }
+
+    var actionEl = e.target.closest("[data-action]");
+    if(!actionEl) return;
+    var action = actionEl.getAttribute("data-action");
+    var id = actionEl.getAttribute("data-id");
+
+    if(action === "startBatch") startBatch(id);
+    else if(action === "completeBatch") completeBatch(id);
+    else if(action === "clearStart") clearStart(id);
+    else if(action === "clearEnd") clearEnd(id);
+    else if(action === "clearUnits") clearUnits(id);
+    else if(action === "edit") editFinishedUnits(id);
+    else if(action === "addUnits") addUnits(id, parseInt(actionEl.getAttribute("data-amt"),10));
+    else if(action === "addUnitsCustom"){
+      var val = prompt("Add how many completed units?", "10");
+      if(val !== null){ var n = parseInt(val,10); if(!isNaN(n) && n !== 0) addUnits(id, n); }
+    }
+    else if(action === "gotoPackaging") switchView("packaging");
+    else if(action === "confirm"){
+      var input = document.getElementById("units-"+id);
+      confirmPackaging(id, input ? input.value : "");
+    }
+    else if(action === "qcheck") logQualityCheck(id, actionEl.getAttribute("data-result"));
+    else if(action === "flagHelp") flagHelp(actionEl.getAttribute("data-station"));
+    else if(action === "resolveHelp") resolveHelp(parseInt(actionEl.getAttribute("data-idx"),10));
+  });
+
+  document.addEventListener("change", function(e){
+    var el = e.target;
+    if(el.getAttribute && el.getAttribute("data-action") === "setTarget"){
+      setBatchTarget(el.getAttribute("data-id"), el.value);
+    }
+    if(el.getAttribute && el.getAttribute("data-action") === "toggleTraining"){
+      var id = el.getAttribute("data-id");
+      state.trainingDone[id] = el.checked;
+      renderTrainingView();
+    }
+  });
+
+  document.getElementById("btnSync").addEventListener("click", syncNow);
+  document.getElementById("btnSettings").addEventListener("click", function(){
+    var auto = computeAutoGoalAndRate();
+    document.getElementById("cfgDailyGoal").value = config.dailyGoalOverride != null ? config.dailyGoalOverride : "";
+    document.getElementById("cfgDailyGoalAutoHint").textContent = "Auto-computed right now: " + auto.autoGoal.toLocaleString() + " units (from " + auto.mealCount + " synced meals, " + auto.matchedCount + " matched to prior history).";
+    document.getElementById("cfgTargetRate").value = config.targetRateOverride != null ? config.targetRateOverride : "";
+    document.getElementById("cfgTargetRateAutoHint").textContent = "Auto-computed right now: " + auto.autoTargetRate + " units/hr, weighted by today's actual meal mix.";
+    document.getElementById("cfgPlannedHours").value = config.plannedShiftHours;
+    var st = config.shiftStartTime;
+    document.getElementById("cfgShiftStart").value = ("0"+st.getHours()).slice(-2)+":"+("0"+st.getMinutes()).slice(-2);
+    document.getElementById("cfgStationSheetId").value = config.stationSheetId;
+    document.getElementById("cfgStationGid").value = config.stationGid;
+    document.getElementById("cfgInventorySheetId").value = config.inventorySheetId;
+    document.getElementById("cfgInventoryGid").value = config.inventoryGid;
+    openModal("settingsModal");
+  });
+
+  document.getElementById("btnApplySettings").addEventListener("click", function(){
+    var goalStr = norm(document.getElementById("cfgDailyGoal").value);
+    var goal = parseInt(goalStr,10);
+    config.dailyGoalOverride = (goalStr !== "" && !isNaN(goal)) ? goal : null;
+    var rateStr = norm(document.getElementById("cfgTargetRate").value);
+    var rateVal = parseFloat(rateStr);
+    config.targetRateOverride = (rateStr !== "" && !isNaN(rateVal)) ? rateVal : null;
+    var hrs = parseFloat(document.getElementById("cfgPlannedHours").value);
+    if(!isNaN(hrs)) config.plannedShiftHours = hrs;
+    var timeVal = document.getElementById("cfgShiftStart").value;
+    if(timeVal){
+      var parts = timeVal.split(":"); var d = new Date();
+      d.setHours(parseInt(parts[0],10), parseInt(parts[1],10), 0, 0);
+      config.shiftStartTime = d;
+    }
+    config.stationSheetId = norm(document.getElementById("cfgStationSheetId").value) || config.stationSheetId;
+    config.stationGid = norm(document.getElementById("cfgStationGid").value) || config.stationGid;
+    config.inventorySheetId = norm(document.getElementById("cfgInventorySheetId").value) || config.inventorySheetId;
+    config.inventoryGid = norm(document.getElementById("cfgInventoryGid").value) || config.inventoryGid;
+    closeModal("settingsModal");
+    syncNow();
+  });
+
+  document.getElementById("btnUseManualCsv").addEventListener("click", function(){
+    var sCsv = document.getElementById("cfgStationCsvPaste").value;
+    var iCsv = document.getElementById("cfgInventoryCsvPaste").value;
+    var did = false;
+    if(norm(sCsv)){ applyStationCsv(sCsv); did = true; }
+    if(norm(iCsv)){ applyInventoryCsv(iCsv); did = true; }
+    if(did){
+      state.lastSyncTime = new Date();
+      setSyncStatus("live", "Manual paste applied " + formatTime(state.lastSyncTime));
+      renderAll(); closeModal("settingsModal"); showToast("Applied pasted CSV data");
+    } else { showToast("Paste at least one CSV before applying"); }
+  });
+
+  document.getElementById("btnResetShift").addEventListener("click", function(){
+    if(confirm("Reset all tracked progress for this shift? This cannot be undone.")){
+      state.meals = []; state.qualityLog = []; state.helpRequests = []; state.trainingDone = {};
+      closeStationPanel(); renderAll(); closeModal("settingsModal"); showToast("Shift progress reset");
+    }
+  });
+
+  /* ============================================================
+     CLOCK + AUTO-SYNC
+  ============================================================ */
+  function tickClock(){
+    var now = new Date();
+    document.getElementById("clockTime").textContent = formatTime(now);
+    document.getElementById("clockDate").textContent = now.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
+    renderKpis();
+  }
+  tickClock();
+  setInterval(tickClock, 15000);
+
+  syncNow();
+  setInterval(syncNow, 5*60*1000);
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
