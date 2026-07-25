@@ -621,6 +621,7 @@
       var emp2 = col(row, map, "employee_2", 4);
       var eligible = col(row, map, "eligible_stations", row.length-1);
       var notes = col(row, map, "notes", 10);
+      var startPrepRaw = col(row, map, "start_prep", 5);
       var startTimeRaw = col(row, map, "start_time", 6);
       var endTimeRaw = col(row, map, "end_time", 7);
       var unitsCompletedRaw = col(row, map, "units_completed", 8);
@@ -629,7 +630,8 @@
       meals.push({
         mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned",
         employees: [emp1, emp2].filter(Boolean), eligibleStations: eligible, sourceNotes: notes,
-        startTimeRaw: startTimeRaw, endTimeRaw: endTimeRaw, unitsCompletedRaw: unitsCompletedRaw, statusRaw: statusRaw,
+        startPrepRaw: startPrepRaw, startTimeRaw: startTimeRaw, endTimeRaw: endTimeRaw,
+        unitsCompletedRaw: unitsCompletedRaw, statusRaw: statusRaw,
         order: orderCounter++
       });
     }
@@ -659,8 +661,61 @@
      MERGE
   ============================================================ */
   function mealKey(m){ return [lower(m.mealName), norm(m.batchNum), norm(m.station)].join("::"); }
+  // Inventory rows carry no Station column, so they join to a Station row
+  // on (normalized meal name, batch #) only — same join key as the
+  // historical analysis used.
+  function invKey(name, batch){ return normKey(name) + "::" + norm(batch); }
 
-  function mergeMeals(freshList){
+  // Builds a lookup of the Inventory sheet's Column E (Machine Crew Units)
+  // per meal+batch. Only rows with an actual numeric value in that column
+  // count — a blank Column E means "not packaged yet," not zero.
+  function buildInventoryMap(invRows){
+    var map = {};
+    invRows.forEach(function(r){
+      var n = parseInt(r.machineCrewUnits, 10);
+      if(isNaN(n)) return;
+      map[invKey(r.mealName, r.batchNum)] = n;
+    });
+    return map;
+  }
+
+  // Applies the three real gates to one meal record, from the two sheets:
+  //   Column F (Start Prep) = TRUE        -> In Progress
+  //   Column J (Status) = "Complete"      -> Next Up — Packaging
+  //   Inventory Column E (Machine Crew
+  //     Units) has a number for this batch -> Finished, using THAT number
+  //                                            as the packaged count (not
+  //                                            Station's own Units Completed
+  //                                            column — that's prep-side
+  //                                            self-reporting, not the
+  //                                            actual packaging record).
+  // Each gate only ever moves forward (null -> set), never resets a field
+  // that's already set — whether that field was set by this same logic on
+  // an earlier sync or by a staff tap on screen. That's what lets taps and
+  // sheet-derived values share one rule with no separate "who owns this"
+  // bookkeeping: whichever sets a field first wins, and the only way back
+  // to null is the explicit ✕ clear controls — after which this same logic
+  // (or a future tap) is free to re-derive it on the next pass.
+  function applySheetGates(m, fm, invMap){
+    if(!m.startTime && /^true$/i.test(fm.startPrepRaw || "")){
+      m.startTime = parseTimeToDateToday(fm.startTimeRaw) || new Date();
+      m.startFromSheet = true;
+    }
+    if(!m.endTime && /complete/i.test(fm.statusRaw || "")){
+      m.endTime = parseTimeToDateToday(fm.endTimeRaw) || new Date();
+      m.endFromSheet = true;
+    }
+    if(m.packagingUnits == null){
+      var invUnits = invMap[invKey(fm.mealName, fm.batchNum)];
+      if(invUnits != null){
+        m.packagingUnits = invUnits;
+        m.finishedTime = new Date();
+        m.unitsFromSheet = true;
+      }
+    }
+  }
+
+  function mergeMeals(freshList, invMap){
     var existingByKey = {};
     state.meals.forEach(function(m){ existingByKey[mealKey(m)] = m; });
     var merged = []; var seen = {};
@@ -669,47 +724,26 @@
       if(existingByKey[key]){
         var ex = existingByKey[key];
         ex.eligibleStations = fm.eligibleStations; ex.sourceNotes = fm.sourceNotes; ex.employees = fm.employees; ex.order = fm.order;
+        applySheetGates(ex, fm, invMap);
         merged.push(ex);
       } else {
-        // First time we've seen this meal/batch. Two things get seeded:
-        //
-        // 1. Batch Target prefills from historical average units, so
-        //    "Remaining" is meaningful right away instead of starting blank.
-        //    Staff can edit it freely — it's a starting estimate, not a lock.
-        //
-        // 2. STAGE seeds from the sheet's own Start Time / End Time / Units
-        //    Completed columns, reflecting work that already happened in the
-        //    sheet before this screen was even opened:
-        //      no Start Time            -> Not Started
-        //      Start Time, no End Time  -> In Progress
-        //      End Time, no Units       -> Next Up — Packaging
-        //      End Time + Units         -> Finished (units carried over as
-        //                                  the packaging units, since in the
-        //                                  sheet's own workflow that number
-        //                                  WAS the completed/packaged count)
-        // This only runs once per meal, right here at creation — a meal
-        // already being tracked never gets re-seeded on a later re-sync, so
-        // taps made on this screen always win over whatever the sheet says
-        // afterward.
+        // First time we've seen this meal/batch on screen. Batch Target
+        // prefills from historical average units so "Remaining" is
+        // meaningful right away — staff can edit it freely, it's a starting
+        // estimate, not a lock.
         var hist = getMealHistory(fm.mealName);
-        var seededStart = parseTimeToDateToday(fm.startTimeRaw);
-        var seededEnd = seededStart ? parseTimeToDateToday(fm.endTimeRaw) : null;
-        var seededUnits = null;
-        if(seededEnd){
-          var n = parseInt(fm.unitsCompletedRaw, 10);
-          if(!isNaN(n)) seededUnits = n;
-        }
-        merged.push({
+        var fresh = {
           id: key + "::" + Math.floor(Math.random()*1e9),
           mealName: fm.mealName, batchNum: fm.batchNum, station: fm.station, employees: fm.employees,
           eligibleStations: fm.eligibleStations, sourceNotes: fm.sourceNotes, order: fm.order,
-          startTime: seededStart, endTime: seededEnd, stationUnits: 0,
+          startTime: null, endTime: null, stationUnits: 0,
           batchTarget: hist ? Math.round(hist.avgUnits) : null,
           batchTargetIsEstimate: !!hist,
-          packagingUnits: seededUnits,
-          finishedTime: seededUnits != null ? seededEnd : null,
-          seededFromSheet: !!(seededStart || seededEnd || seededUnits != null)
-        });
+          packagingUnits: null, finishedTime: null,
+          startFromSheet: false, endFromSheet: false, unitsFromSheet: false
+        };
+        applySheetGates(fresh, fm, invMap);
+        merged.push(fresh);
       }
     });
     state.meals.forEach(function(m){ var key = mealKey(m); if(!seen[key]) merged.push(m); });
@@ -743,7 +777,11 @@
       fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed"); return r.text(); }),
       fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed"); return r.text(); })
     ]).then(function(results){
-      applyStationCsv(results[0]); applyInventoryCsv(results[1]);
+      // Inventory must be parsed FIRST so its Column E units are available
+      // to join against while merging Station rows — Finished status is
+      // derived from Inventory, not from anything in the Station sheet.
+      applyInventoryCsv(results[1]);
+      applyStationCsv(results[0]);
       state.lastSyncTime = new Date(); state.syncOk = true;
       setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime));
       renderAll(); showToast("Synced from Google Sheets");
@@ -756,7 +794,8 @@
   }
   function applyStationCsv(csvText){
     var parsed = parseStationSheet(csvText);
-    mergeMeals(parsed.meals); state.stations = parsed.stations; recomputeStages();
+    var invMap = buildInventoryMap(state.inventoryRows);
+    mergeMeals(parsed.meals, invMap); state.stations = parsed.stations; recomputeStages();
   }
   function applyInventoryCsv(csvText){ state.inventoryRows = parseInventorySheet(csvText); }
 
@@ -772,6 +811,7 @@
   function clearStart(id){
     var m = findMeal(id); if(!m) return;
     m.startTime = null; m.endTime = null; m.stationUnits = 0; m.packagingUnits = null; m.finishedTime = null;
+    m.startFromSheet = false; m.endFromSheet = false; m.unitsFromSheet = false;
     recomputeStages(); renderAll();
   }
   function addUnits(id, n){
@@ -801,6 +841,7 @@
   function clearEnd(id){
     var m = findMeal(id); if(!m) return;
     m.endTime = null; m.packagingUnits = null; m.finishedTime = null;
+    m.endFromSheet = false; m.unitsFromSheet = false;
     recomputeStages(); renderAll();
   }
   function confirmPackaging(id, units){
@@ -814,6 +855,7 @@
   function clearUnits(id){
     var m = findMeal(id); if(!m) return;
     m.packagingUnits = null; m.finishedTime = null;
+    m.unitsFromSheet = false;
     recomputeStages(); renderAll();
   }
   function editFinishedUnits(id){
@@ -1016,7 +1058,7 @@
 
       body = '<div class="panel-card">'
         + '<div class="panel-head"><div><h2>Current Meal</h2></div><span class="pill-status '+STAGE_CLASS[current.stage]+'">'+(current.stage==='in_progress'?'Line Running':STAGE_LABEL[current.stage])+'</span></div>'
-        + '<div class="panel-meal-name">'+escapeHtml(current.mealName)+(crewLine?' · '+escapeHtml(crewLine):'')+(current.seededFromSheet?' · <span style="color:var(--blue); font-weight:700;">synced from sheet</span>':'')+'</div>'
+        + '<div class="panel-meal-name">'+escapeHtml(current.mealName)+(crewLine?' · '+escapeHtml(crewLine):'')+((current.startFromSheet||current.endFromSheet||current.unitsFromSheet)?' · <span style="color:var(--blue); font-weight:700;">synced from sheet</span>':'')+'</div>'
         + '<div class="stat-row">'
         + '<div class="stat-box"><div class="stat-label">Batch Target'+(current.batchTargetIsEstimate?' <span style="color:var(--blue); font-weight:700;">(est.)</span>':'')+'</div><input class="target-input" type="number" min="0" placeholder="—" value="'+(current.batchTarget!=null?current.batchTarget:'')+'" data-action="setTarget" data-id="'+current.id+'"></div>'
         + '<div class="stat-box"><div class="stat-label">Units So Far</div><div class="stat-value">'+(current.stationUnits||0)+'</div></div>'
@@ -1059,7 +1101,7 @@
     if(m.batchNum) meta.push("Batch #"+m.batchNum);
     meta.push("Station "+m.station);
     if(m.employees && m.employees.length) meta.push(m.employees.join(" & "));
-    if(m.seededFromSheet) meta.push("synced from sheet");
+    if(m.startFromSheet||m.endFromSheet||m.unitsFromSheet) meta.push("synced from sheet");
 
     var actions = "";
     if(m.stage === "packaging"){
@@ -1294,8 +1336,10 @@
     var sCsv = document.getElementById("cfgStationCsvPaste").value;
     var iCsv = document.getElementById("cfgInventoryCsvPaste").value;
     var did = false;
-    if(norm(sCsv)){ applyStationCsv(sCsv); did = true; }
+    // Inventory first — Station merge needs its Column E units to join
+    // against for the Finished gate.
     if(norm(iCsv)){ applyInventoryCsv(iCsv); did = true; }
+    if(norm(sCsv)){ applyStationCsv(sCsv); did = true; }
     if(did){
       state.lastSyncTime = new Date();
       setSyncStatus("live", "Manual paste applied " + formatTime(state.lastSyncTime));
