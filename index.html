@@ -542,6 +542,18 @@
     }
     return -1;
   }
+  // Some days' Station Assignment sheet merges "STATION 1"'s label directly
+  // into the "Meal Name" header cell itself (e.g. "Meal Name STATION 1"),
+  // instead of giving Station 1 its own separator row the way Stations 2-8
+  // get. An exact-match lookup misses that cell entirely and the parser
+  // silently returns zero meals. Match on a cell that STARTS WITH the target
+  // text instead, so both "Meal Name" and "Meal Name STATION 1" are found.
+  function findHeaderIndexStartsWith(rows, prefix){
+    for(var i=0;i<rows.length;i++){
+      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) === 0){ return i; } }
+    }
+    return -1;
+  }
   function buildColMap(headerRow){
     var map = {};
     headerRow.forEach(function(h,idx){
@@ -582,7 +594,7 @@
       }
     }
 
-    var headerIdx = findHeaderIndex(rows, "meal name");
+    var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
     if(headerIdx === -1) return { meals: meals, stations: stations };
     var map = buildColMap(rows[headerIdx]);
     var currentStationFromSeparator = "";
@@ -626,7 +638,7 @@
 
   function parseInventorySheet(csvText){
     var rows = parseCSV(csvText);
-    var headerIdx = findHeaderIndex(rows, "meal name");
+    var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
     if(headerIdx === -1) return [];
     var map = buildColMap(rows[headerIdx]);
     var out = [];
