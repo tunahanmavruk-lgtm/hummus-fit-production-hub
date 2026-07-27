@@ -401,6 +401,19 @@
     </div>
 
     <div class="settings-section">
+      <h3>Meal History Auto-Refresh</h3>
+      <div class="field">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" id="cfgAutoRefreshHistory" style="width:20px; height:20px;">
+          Recompute per-meal history from recent tabs each session
+        </label>
+        <div class="help" id="cfgHistoryStatusHint">Using built-in defaults.</div>
+      </div>
+      <button class="btn outline full" id="btnForceRecomputeHistory">Recompute History Now</button>
+      <div class="help" style="margin-top:6px;">Turn this off instantly if it ever misbehaves — the dashboard falls straight back to the original baked-in averages with no other change.</div>
+    </div>
+
+    <div class="settings-section">
       <h3>Station Assignments Sheet</h3>
       <div class="field"><label>Google Sheet ID</label><input type="text" id="cfgStationSheetId"></div>
       <div class="field"><label>Today's Tab (gid) — manual fallback</label><input type="text" id="cfgStationGid">
@@ -454,6 +467,15 @@
     // become a manual fallback only, used if the API key is blank or the
     // lookup fails. Leave blank to keep the old fully-manual behavior.
     sheetsApiKey: "AIzaSyAHBIKo3oCzeNzQu19UoNM2KfByy2OUMRs",
+    // When true (and an API key is set), the dashboard walks back through
+    // recent dated tabs in both sheets once per session, in the background,
+    // and recomputes per-meal historical averages itself — no more manual
+    // re-upload-and-reship cycle. Instant off-switch: flip to false in
+    // Settings to fall straight back to the baked-in MEAL_HISTORY table
+    // below with zero other behavior change, if this ever needs to be
+    // disabled quickly on a live shift.
+    autoRefreshHistory: true,
+    historyLookbackDays: 21,
     // Daily Goal / Target Rate are auto-computed from today's synced meal
     // list × historical per-meal averages (see MEAL_HISTORY below). Set
     // either override to a number in Settings to pin it manually instead;
@@ -479,7 +501,22 @@
   var MEAL_HISTORY_FALLBACK = {"avgUnits":229.5,"avgRatePerHour":100.3,"avgTotalMinutes":137.3};
 
   function normKey(s){ return (s||"").toString().toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
-  function getMealHistory(mealName){ return MEAL_HISTORY[normKey(mealName)] || null; }
+  // Prefers a freshly recomputed average (from real recent tabs) over the
+  // static baked-in table whenever the recompute actually found runs for
+  // this meal. A meal absent from the lookback window (rare, or just not
+  // made recently) still falls back to the baked-in table instead of
+  // losing its estimate entirely.
+  function getMealHistory(mealName){
+    var key = normKey(mealName);
+    if(config.autoRefreshHistory && state.recomputedHistory && state.recomputedHistory[key]){
+      return state.recomputedHistory[key];
+    }
+    return MEAL_HISTORY[key] || null;
+  }
+  function getMealHistoryFallback(){
+    if(config.autoRefreshHistory && state.recomputedHistoryFallback) return state.recomputedHistoryFallback;
+    return MEAL_HISTORY_FALLBACK;
+  }
 
   // In-memory only for the whole session — no localStorage/sessionStorage.
   var state = {
@@ -491,7 +528,11 @@
     activeStation: null,
     qualityLog: [],       // {mealName, station, result, note, time}
     helpRequests: [],     // {station, time}
-    trainingDone: {}       // id -> bool
+    trainingDone: {},      // id -> bool
+    recomputedHistory: null,       // filled in once by refreshMealHistoryFromSheets()
+    recomputedHistoryFallback: null,
+    historyRecomputeDone: false,
+    historyRecomputeStatus: "Using built-in defaults"
   };
 
   var STAGE_LABEL = { not_started:"Not Started", in_progress:"In Progress", packaging:"Next Up — Packaging", finished:"Finished" };
@@ -530,13 +571,15 @@
   function lower(s){ return norm(s).toLowerCase(); }
 
   // Parses a time-of-day string as exported by Google Sheets (e.g.
-  // "8:03:50 AM") into a Date on TODAY's date — the sheet's own cells only
-  // carry a time-of-day once exported to CSV, no date, so "today" (the gid
-  // we synced) is the only date that makes sense to attach. Returns null for
-  // blank cells or malformed values (e.g. a stray bare date like "7/21/2026"
-  // that shows up in a few rows from data-entry glitches) rather than
-  // guessing — an unparseable time should not silently become a real stage.
-  function parseTimeToDateToday(str){
+  // "8:03:50 AM") onto a given base date's calendar day — the sheet's own
+  // cells only carry a time-of-day, no date, so the caller supplies which
+  // day it belongs to (today's synced tab, or a specific historical tab's
+  // date when recomputing history). Returns null for blank cells or
+  // malformed values (e.g. a stray bare date like "7/21/2026" that shows up
+  // in a few rows from data-entry glitches) rather than guessing — an
+  // unparseable time should not silently become a real stage or a bogus
+  // historical duration.
+  function parseTimeOnDate(str, baseDate){
     var s = norm(str);
     if(!s) return null;
     var m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
@@ -545,10 +588,31 @@
     var ap = m[4].toUpperCase();
     if(ap === "PM" && hh !== 12) hh += 12;
     if(ap === "AM" && hh === 12) hh = 0;
-    var d = new Date();
+    var d = new Date(baseDate.getTime());
     d.setHours(hh, mm, ss, 0);
     return d;
   }
+  function parseTimeToDateToday(str){ return parseTimeOnDate(str, new Date()); }
+
+  // Parses the Inventory sheet's "Added to Shopify" column, formatted like
+  // "✓ Jul 21, 01:44 PM" — this is the actual packaging-verified completion
+  // timestamp used to compute real start-to-packaged durations. yearHint
+  // supplies the year, since the sheet's own text never includes one.
+  function parseShopifyTimestamp(str, yearHint){
+    var s = norm(str);
+    if(!s) return null;
+    var m = s.match(/([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if(!m) return null;
+    var monIdx = MONTH_ABBR_LOOKUP[m[1].slice(0,3).toLowerCase()];
+    if(monIdx == null) return null;
+    var day = parseInt(m[2],10), hh = parseInt(m[3],10), mm = parseInt(m[4],10);
+    var ap = m[5].toUpperCase();
+    if(ap === "PM" && hh !== 12) hh += 12;
+    if(ap === "AM" && hh === 12) hh = 0;
+    var d = new Date(yearHint, monIdx, day, hh, mm, 0, 0);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  var MONTH_ABBR_LOOKUP = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
 
   function findHeaderIndex(rows, mustHaveCol){
     for(var i=0;i<rows.length;i++){
@@ -857,9 +921,125 @@
   }
 
   /* ============================================================
-     FETCH
+     HISTORY RECOMPUTE — walks back through recent dated tabs in both
+     sheets (using the browser's own connection, same as everything else —
+     nothing runs on any server) and rederives real per-meal
+     start-to-packaged averages, the same match-by-(meal name, batch #)
+     method used for the original one-time analysis. Runs ONCE per session,
+     in the background, after the dashboard is already live on today's
+     data — never blocks or delays what's on screen. Any failure leaves
+     state.recomputedHistory unset, so getMealHistory() transparently keeps
+     using the baked-in MEAL_HISTORY table with no visible disruption.
   ============================================================ */
   function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/gviz/tq?tqx=out:csv&gid=" + gid; }
+  function parseStationDateFromTabName(title){
+    var m = norm(title).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!m) return null;
+    var d = new Date(parseInt(m[1],10), parseInt(m[2],10)-1, parseInt(m[3],10));
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // Fetches and joins ONE historical day's two tabs, returning a list of
+  // {mealName, units, totalMinutes} for successfully matched runs. Mirrors
+  // the original analysis's guard rails: a run only counts if Inventory
+  // Column E actually has units (that's the real packaged-confirmed count,
+  // same authority rule as live stage tracking) and the computed duration
+  // is positive and under 20 hours (guards against bad source data, like a
+  // stray date-only cell parsing to midnight).
+  function fetchHistoricalDayRuns(stationTab, inventoryTab, dayDate){
+    return Promise.all([
+      fetch(csvUrl(config.stationSheetId, stationTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("station tab fetch failed")); }),
+      fetch(csvUrl(config.inventorySheetId, inventoryTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("inventory tab fetch failed")); })
+    ]).then(function(results){
+      var stationParsed = parseStationSheet(results[0]);
+      var invRows = parseInventorySheet(results[1]);
+      var invByKey = {};
+      invRows.forEach(function(r){
+        var n = parseInt(r.machineCrewUnits, 10);
+        if(isNaN(n)) return;
+        invByKey[invKey(r.mealName, r.batchNum)] = { units: n, addedToShopifyRaw: r.addedToShopify };
+      });
+      var runs = [];
+      stationParsed.meals.forEach(function(fm){
+        var startTime = parseTimeOnDate(fm.startTimeRaw, dayDate);
+        if(!startTime) return;
+        var invHit = invByKey[invKey(fm.mealName, fm.batchNum)];
+        if(!invHit) return;
+        var packagedAt = parseShopifyTimestamp(invHit.addedToShopifyRaw, dayDate.getFullYear());
+        if(!packagedAt) return;
+        var totalMinutes = (packagedAt - startTime) / 60000;
+        if(totalMinutes <= 0 || totalMinutes > 20*60) return;
+        runs.push({ mealName: fm.mealName, units: invHit.units, totalMinutes: totalMinutes });
+      });
+      return runs;
+    });
+  }
+
+  function refreshMealHistoryFromSheets(){
+    if(!config.autoRefreshHistory || !norm(config.sheetsApiKey) || state.historyRecomputeDone) return;
+    state.historyRecomputeDone = true; // once per session, success or failure
+    Promise.all([
+      fetchSheetTabs(config.stationSheetId, config.sheetsApiKey),
+      fetchSheetTabs(config.inventorySheetId, config.sheetsApiKey)
+    ]).then(function(results){
+      var stationTabs = results[0], invTabs = results[1];
+      var todayReal = new Date(); todayReal.setHours(0,0,0,0);
+      var candidateDates = stationTabs
+        .map(function(t){ return parseStationDateFromTabName(t.title); })
+        .filter(function(d){ return d && d.getTime() !== todayReal.getTime(); }) // exclude today — incomplete mid-shift
+        .sort(function(a,b){ return b - a; })
+        .slice(0, config.historyLookbackDays || 21);
+
+      var dayPromises = candidateDates.map(function(d){
+        var sHit = findStationTab(stationTabs, d);
+        var iHit = findInventoryTab(invTabs, d);
+        if(!sHit || !iHit) return Promise.resolve([]); // missing tab that day — just skip it
+        return fetchHistoricalDayRuns(sHit, iHit, d).catch(function(){ return []; });
+      });
+
+      return Promise.all(dayPromises).then(function(perDayRuns){
+        var allRuns = [].concat.apply([], perDayRuns);
+        var byMeal = {};
+        allRuns.forEach(function(r){
+          var key = normKey(r.mealName);
+          (byMeal[key] = byMeal[key] || []).push(r);
+        });
+        var recomputed = {};
+        var globalUnits = 0, globalMinutes = 0, globalRuns = 0;
+        Object.keys(byMeal).forEach(function(key){
+          var runs = byMeal[key];
+          var sumUnits = runs.reduce(function(s,r){ return s + r.units; }, 0);
+          var sumMinutes = runs.reduce(function(s,r){ return s + r.totalMinutes; }, 0);
+          var avgUnits = sumUnits / runs.length, avgMinutes = sumMinutes / runs.length;
+          recomputed[key] = {
+            avgUnits: Math.round(avgUnits*10)/10,
+            avgTotalMinutes: Math.round(avgMinutes*10)/10,
+            avgRatePerHour: avgMinutes > 0 ? Math.round((avgUnits/(avgMinutes/60))*10)/10 : 0,
+            runs: runs.length
+          };
+          globalUnits += sumUnits; globalMinutes += sumMinutes; globalRuns += runs.length;
+        });
+        if(globalRuns > 0){
+          state.recomputedHistory = recomputed;
+          state.recomputedHistoryFallback = {
+            avgUnits: Math.round((globalUnits/globalRuns)*10)/10,
+            avgRatePerHour: globalMinutes > 0 ? Math.round((globalUnits/(globalMinutes/60))*10)/10 : 0,
+            avgTotalMinutes: Math.round((globalMinutes/globalRuns)*10)/10
+          };
+        }
+        state.historyRecomputeStatus = "Recomputed from " + candidateDates.length + " recent day(s): "
+          + Object.keys(recomputed).length + " meals, " + globalRuns + " matched runs (as of " + formatTime(new Date()) + ")";
+        console.log(state.historyRecomputeStatus);
+      });
+    }).catch(function(err){
+      console.error("History recompute failed, staying on built-in defaults:", err);
+      state.historyRecomputeStatus = "Recompute failed — using built-in defaults";
+    });
+  }
+
+  /* ============================================================
+     FETCH
+  ============================================================ */
   function setSyncStatus(mode, text){
     var el = document.getElementById("syncStatus"); el.className = mode;
     document.getElementById("syncStatusText").textContent = text;
@@ -883,6 +1063,13 @@
       var tabHint = state.resolvedStationTabName ? (" · reading " + state.resolvedStationTabName) : "";
       setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime) + tabHint);
       renderAll(); showToast("Synced from Google Sheets");
+      // Kick off the history recompute in the BACKGROUND, deliberately not
+      // chained/awaited here — today's live sync has already rendered and
+      // is fully usable. This only runs once per session (guarded inside
+      // the function itself) and re-renders the KPI bar when it finishes,
+      // a few seconds to a minute or so later, using freshly recomputed
+      // averages instead of the baked-in table wherever it found data.
+      Promise.resolve(refreshMealHistoryFromSheets()).then(function(){ renderAll(); });
     }).catch(function(err){
       state.syncOk = false;
       setSyncStatus("offline", "Sync failed — check Settings / sharing");
@@ -1003,10 +1190,11 @@
   // of one flat number that's wrong the moment the meal lineup changes.
   function computeAutoGoalAndRate(){
     var totalUnits = 0, totalMinutes = 0, matchedCount = 0;
+    var fallback = getMealHistoryFallback();
     state.meals.forEach(function(m){
       var h = getMealHistory(m.mealName);
-      var units = h ? h.avgUnits : MEAL_HISTORY_FALLBACK.avgUnits;
-      var mins = h ? h.avgTotalMinutes : MEAL_HISTORY_FALLBACK.avgTotalMinutes;
+      var units = h ? h.avgUnits : fallback.avgUnits;
+      var mins = h ? h.avgTotalMinutes : fallback.avgTotalMinutes;
       totalUnits += units; totalMinutes += mins;
       if(h) matchedCount++;
     });
@@ -1427,7 +1615,18 @@
     document.getElementById("cfgStationGid").value = config.stationGid;
     document.getElementById("cfgInventorySheetId").value = config.inventorySheetId;
     document.getElementById("cfgInventoryGid").value = config.inventoryGid;
+    document.getElementById("cfgAutoRefreshHistory").checked = !!config.autoRefreshHistory;
+    document.getElementById("cfgHistoryStatusHint").textContent = state.historyRecomputeStatus;
     openModal("settingsModal");
+  });
+
+  document.getElementById("btnForceRecomputeHistory").addEventListener("click", function(){
+    state.historyRecomputeDone = false; // clear the once-per-session guard
+    document.getElementById("cfgHistoryStatusHint").textContent = "Recomputing…";
+    Promise.resolve(refreshMealHistoryFromSheets()).then(function(){
+      document.getElementById("cfgHistoryStatusHint").textContent = state.historyRecomputeStatus;
+      renderAll();
+    });
   });
 
   document.getElementById("btnApplySettings").addEventListener("click", function(){
@@ -1450,6 +1649,12 @@
     config.stationGid = norm(document.getElementById("cfgStationGid").value) || config.stationGid;
     config.inventorySheetId = norm(document.getElementById("cfgInventorySheetId").value) || config.inventorySheetId;
     config.inventoryGid = norm(document.getElementById("cfgInventoryGid").value) || config.inventoryGid;
+    var wasAutoRefresh = config.autoRefreshHistory;
+    config.autoRefreshHistory = document.getElementById("cfgAutoRefreshHistory").checked;
+    // Re-arm the once-per-session guard if the toggle was just switched
+    // back on, so turning it off and on again actually retries instead of
+    // silently staying done-and-skipped from earlier in the session.
+    if(config.autoRefreshHistory && !wasAutoRefresh) state.historyRecomputeDone = false;
     closeModal("settingsModal");
     syncNow();
   });
