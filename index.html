@@ -394,17 +394,24 @@
     </div>
 
     <div class="settings-section">
+      <h3>Auto Tab Lookup</h3>
+      <div class="field"><label>Google Sheets API Key</label><input type="text" id="cfgSheetsApiKey">
+        <div class="help" id="cfgSheetsApiKeyHint">When set, the app finds today's (or, after 11pm, tomorrow's) tab by its actual name every sync — no more manual gid copying. Leave blank to go back to fully manual gid entry below.</div>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <h3>Station Assignments Sheet</h3>
       <div class="field"><label>Google Sheet ID</label><input type="text" id="cfgStationSheetId"></div>
-      <div class="field"><label>Today's Tab (gid)</label><input type="text" id="cfgStationGid">
-        <div class="help">Open today's dated tab, copy the number after <code>gid=</code> in the URL. Changes every day.</div>
+      <div class="field"><label>Today's Tab (gid) — manual fallback</label><input type="text" id="cfgStationGid">
+        <div class="help">Only used if the API key above is blank or the auto lookup fails. Open today's dated tab, copy the number after <code>gid=</code> in the URL.</div>
       </div>
     </div>
 
     <div class="settings-section">
       <h3>Inventory Sheet</h3>
       <div class="field"><label>Google Sheet ID</label><input type="text" id="cfgInventorySheetId"></div>
-      <div class="field"><label>Today's Tab (gid)</label><input type="text" id="cfgInventoryGid"></div>
+      <div class="field"><label>Today's Tab (gid) — manual fallback</label><input type="text" id="cfgInventoryGid"></div>
     </div>
 
     <div class="settings-section">
@@ -440,6 +447,13 @@
     stationGid: "555392155",
     inventorySheetId: "1VSNtHtIN87bMrQlfFUPvaSQqGQWE9g6hAu0EgXAGVsU",
     inventoryGid: "1563059118",
+    // Google Sheets API key (Sheets API enabled, restricted to this site's
+    // domain in Google Cloud Console). When set, the app looks up each
+    // sheet's actual tab list by name every sync and resolves today's (or,
+    // after 11pm, tomorrow's) gid automatically — the two gid fields above
+    // become a manual fallback only, used if the API key is blank or the
+    // lookup fails. Leave blank to keep the old fully-manual behavior.
+    sheetsApiKey: "AIzaSyAHBIKo3oCzeNzQu19UoNM2KfByy2OUMRs",
     // Daily Goal / Target Rate are auto-computed from today's synced meal
     // list × historical per-meal averages (see MEAL_HISTORY below). Set
     // either override to a number in Settings to pin it manually instead;
@@ -762,6 +776,87 @@
   function recomputeStages(){ state.meals.forEach(function(m){ m.stage = getStage(m); }); }
 
   /* ============================================================
+     AUTO TAB LOOKUP — resolves each sheet's gid by matching today's (or,
+     after 11pm, tomorrow's) tab NAME via the Sheets API, instead of relying
+     on a gid number someone pasted into Settings that morning. Falls back
+     to whatever gid is already in config/Settings if no API key is set,
+     the lookup fails, or the target tab doesn't exist yet.
+  ============================================================ */
+  var WEEKDAY_ABBR = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
+  // Station Assignment tabs are named like "2026-07-27".
+  function stationTabName(d){ return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
+  // Inventory tabs are named like "Mon Jul 27 | Exp 8/14" — the "Exp ..."
+  // half is an expiration date that varies day to day and can't be
+  // predicted, so match on the fixed weekday+month+day PREFIX only.
+  function inventoryTabPrefix(d){ return WEEKDAY_ABBR[d.getDay()] + " " + MONTH_ABBR[d.getMonth()] + " " + d.getDate(); }
+  // Past 11pm, start targeting tomorrow's tab so the next shift's data is
+  // already resolved before it starts — this is the "roll over at 11pm"
+  // behavior. Before 11pm, target today.
+  function targetDateForNow(offsetDays){
+    var d = new Date();
+    if(d.getHours() >= 23) d.setDate(d.getDate()+1);
+    if(offsetDays) d.setDate(d.getDate()+offsetDays);
+    d.setHours(0,0,0,0);
+    return d;
+  }
+  function fetchSheetTabs(sheetId, apiKey){
+    var url = "https://sheets.googleapis.com/v4/spreadsheets/" + sheetId
+      + "?fields=sheets.properties(sheetId,title)&key=" + apiKey;
+    return fetch(url).then(function(r){
+      if(!r.ok) throw new Error("tab lookup failed for " + sheetId + " (" + r.status + ")");
+      return r.json();
+    }).then(function(json){
+      return (json.sheets||[]).map(function(s){
+        return { title: norm(s.properties.title), gid: String(s.properties.sheetId) };
+      });
+    });
+  }
+  function findStationTab(tabs, d){
+    var name = stationTabName(d);
+    return tabs.filter(function(t){ return t.title === name; })[0] || null;
+  }
+  function findInventoryTab(tabs, d){
+    var prefix = inventoryTabPrefix(d);
+    return tabs.filter(function(t){ return t.title.indexOf(prefix) === 0; })[0] || null;
+  }
+  // Resolves and OVERWRITES config.stationGid / config.inventoryGid in
+  // place when a match is found, so the rest of syncNow() doesn't need to
+  // know whether the gid came from auto-lookup or manual entry. Never
+  // throws — logs and falls back to whatever gid was already configured.
+  function resolveGidsAuto(){
+    if(!norm(config.sheetsApiKey)){ return Promise.resolve(); }
+    var target = targetDateForNow();
+    return Promise.all([
+      fetchSheetTabs(config.stationSheetId, config.sheetsApiKey),
+      fetchSheetTabs(config.inventorySheetId, config.sheetsApiKey)
+    ]).then(function(results){
+      var stationTabs = results[0], invTabs = results[1];
+      var sHit = findStationTab(stationTabs, target);
+      var iHit = findInventoryTab(invTabs, target);
+      // If we rolled forward to tomorrow (past 11pm) and tomorrow's tab
+      // doesn't exist yet in one or both sheets, fall back to TODAY's tab
+      // for whichever one is missing rather than syncing nothing at all.
+      if(!sHit || !iHit){
+        var todayReal = new Date(); todayReal.setHours(0,0,0,0);
+        if(!sHit) sHit = findStationTab(stationTabs, todayReal);
+        if(!iHit) iHit = findInventoryTab(invTabs, todayReal);
+      }
+      state.resolvedStationTabName = sHit ? sHit.title : null;
+      state.resolvedInventoryTabName = iHit ? iHit.title : null;
+      if(sHit) config.stationGid = sHit.gid;
+      if(iHit) config.inventoryGid = iHit.gid;
+      if(!sHit || !iHit){
+        showToast("Auto tab lookup: couldn't find " + (!sHit?"a Station":"") + (!sHit&&!iHit?" or ":"") + (!iHit?"an Inventory":"") + " tab for today — check the sheet has today's tab created.");
+      }
+    }).catch(function(err){
+      console.error("Auto tab lookup failed, using manually configured gid:", err);
+      showToast("Auto tab lookup failed — using the gid currently in Settings.");
+    });
+  }
+
+  /* ============================================================
      FETCH
   ============================================================ */
   function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/gviz/tq?tqx=out:csv&gid=" + gid; }
@@ -771,19 +866,22 @@
   }
   function syncNow(){
     setSyncStatus("syncing", "Syncing…");
-    var stationUrl = csvUrl(config.stationSheetId, config.stationGid);
-    var invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
-    Promise.all([
-      fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed"); return r.text(); }),
-      fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed"); return r.text(); })
-    ]).then(function(results){
+    resolveGidsAuto().then(function(){
+      var stationUrl = csvUrl(config.stationSheetId, config.stationGid);
+      var invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
+      return Promise.all([
+        fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed"); return r.text(); }),
+        fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed"); return r.text(); })
+      ]);
+    }).then(function(results){
       // Inventory must be parsed FIRST so its Column E units are available
       // to join against while merging Station rows — Finished status is
       // derived from Inventory, not from anything in the Station sheet.
       applyInventoryCsv(results[1]);
       applyStationCsv(results[0]);
       state.lastSyncTime = new Date(); state.syncOk = true;
-      setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime));
+      var tabHint = state.resolvedStationTabName ? (" · reading " + state.resolvedStationTabName) : "";
+      setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime) + tabHint);
       renderAll(); showToast("Synced from Google Sheets");
     }).catch(function(err){
       state.syncOk = false;
@@ -1302,6 +1400,10 @@
     document.getElementById("cfgPlannedHours").value = config.plannedShiftHours;
     var st = config.shiftStartTime;
     document.getElementById("cfgShiftStart").value = ("0"+st.getHours()).slice(-2)+":"+("0"+st.getMinutes()).slice(-2);
+    document.getElementById("cfgSheetsApiKey").value = config.sheetsApiKey || "";
+    document.getElementById("cfgSheetsApiKeyHint").textContent = state.resolvedStationTabName
+      ? ("Currently reading: " + state.resolvedStationTabName + " / " + (state.resolvedInventoryTabName||"—") + ". Leave blank to go back to fully manual gid entry below.")
+      : "When set, the app finds today's (or, after 11pm, tomorrow's) tab by its actual name every sync — no more manual gid copying. Leave blank to go back to fully manual gid entry below.";
     document.getElementById("cfgStationSheetId").value = config.stationSheetId;
     document.getElementById("cfgStationGid").value = config.stationGid;
     document.getElementById("cfgInventorySheetId").value = config.inventorySheetId;
@@ -1324,6 +1426,7 @@
       d.setHours(parseInt(parts[0],10), parseInt(parts[1],10), 0, 0);
       config.shiftStartTime = d;
     }
+    config.sheetsApiKey = norm(document.getElementById("cfgSheetsApiKey").value);
     config.stationSheetId = norm(document.getElementById("cfgStationSheetId").value) || config.stationSheetId;
     config.stationGid = norm(document.getElementById("cfgStationGid").value) || config.stationGid;
     config.inventorySheetId = norm(document.getElementById("cfgInventorySheetId").value) || config.inventorySheetId;
