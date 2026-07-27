@@ -1019,6 +1019,24 @@
     };
   }
 
+  // The manually-set Settings "Shift Start Time" defaults to whatever time
+  // the page happened to load and has no relationship to when work actually
+  // started — using it as the elapsed-time denominator is what produced
+  // the 285,120/hr and 307,380/hr readings (completed units divided by a
+  // near-zero elapsed time because the clock never got reset). Instead,
+  // derive the real shift start from the EARLIEST startTime among today's
+  // synced meals — that value is already correctly sheet- or tap-derived,
+  // so it reflects when the first meal genuinely went in progress. Falls
+  // back to the Settings field only if no meal has a startTime yet (i.e.
+  // nothing has started).
+  function effectiveShiftStart(){
+    var earliest = null;
+    state.meals.forEach(function(m){
+      if(m.startTime && (!earliest || m.startTime < earliest)) earliest = m.startTime;
+    });
+    return earliest || config.shiftStartTime;
+  }
+
   function computeKpis(){
     var finished = state.meals.filter(function(m){ return m.stage === "finished"; });
     var completed = finished.reduce(function(s,m){ return s + (m.packagingUnits||0); }, 0);
@@ -1027,11 +1045,12 @@
     var targetRate = (config.targetRateOverride != null) ? config.targetRateOverride : auto.autoTargetRate;
     var progressPct = goal > 0 ? Math.min(100, Math.round(completed/goal*100)) : 0;
     var now = new Date();
-    var elapsedHours = Math.max((now - config.shiftStartTime) / 3600000, 1/60);
+    var shiftStart = effectiveShiftStart();
+    var elapsedHours = Math.max((now - shiftStart) / 3600000, 1/60);
     var rate = completed / elapsedHours;
     var remaining = Math.max(goal - completed, 0);
     var estFinish = rate > 0 ? new Date(now.getTime() + (remaining/rate)*3600000) : null;
-    var scheduledFinish = new Date(config.shiftStartTime.getTime() + config.plannedShiftHours*3600000);
+    var scheduledFinish = new Date(shiftStart.getTime() + config.plannedShiftHours*3600000);
     var deltaMinutes = estFinish ? Math.round((scheduledFinish - estFinish)/60000) : null;
     return {
       completed:completed, goal:goal, progressPct:progressPct, rate:Math.round(rate), targetRate:Math.round(targetRate),
