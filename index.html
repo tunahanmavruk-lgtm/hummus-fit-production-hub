@@ -628,7 +628,7 @@
   // text instead, so both "Meal Name" and "Meal Name STATION 1" are found.
   function findHeaderIndexStartsWith(rows, prefix){
     for(var i=0;i<rows.length;i++){
-      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) === 0){ return i; } }
+      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) !== -1){ return i; } }
     }
     return -1;
   }
