@@ -626,6 +626,14 @@
   // get. An exact-match lookup misses that cell entirely and the parser
   // silently returns zero meals. Match on a cell that STARTS WITH the target
   // text instead, so both "Meal Name" and "Meal Name STATION 1" are found.
+  // Some days' header cell merges EXTRA text around "meal name" on
+  // either side — a station label appended after ("Meal Name STATION
+  // 1"), or the section title prepended before ("MEAL LIST — grouped
+  // by station Meal Name STATION 1"), or both. A strict "starts with"
+  // check misses that last, real-world case entirely (confirmed
+  // directly against a live tab) since the cell no longer begins with
+  // the target text — it just contains it somewhere in the middle.
+  // Matching on "contains anywhere" instead handles all three shapes.
   function findHeaderIndexStartsWith(rows, prefix){
     for(var i=0;i<rows.length;i++){
       for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) !== -1){ return i; } }
@@ -1295,11 +1303,19 @@
       return;
     }
     grid.innerHTML = stNums.map(function(st){
-      var info = state.stations[st] || {};
       var meals = mealsForStation(st);
       var counts = {not_started:0,in_progress:0,packaging:0,finished:0};
       meals.forEach(function(m){ counts[m.stage]++; });
-      var crew = [info.employee1, info.employee2].filter(Boolean).join(" & ") || "Unassigned crew";
+      // Crew names live on each meal (already correctly parsed from the
+      // real sheet), not on the separate station-summary object, which
+      // is a different section of the spreadsheet that isn't reliably
+      // populated in this sheet's actual format. Deriving from the
+      // meals themselves is what actually has real data.
+      var crewSet = [];
+      meals.forEach(function(m){
+        (m.employees||[]).forEach(function(e){ if(e && crewSet.indexOf(e)===-1) crewSet.push(e); });
+      });
+      var crew = crewSet.join(" & ") || "Unassigned crew";
       var badges = "";
       if(counts.in_progress) badges += '<span class="badge inprogress">'+counts.in_progress+' Running</span>';
       if(counts.packaging) badges += '<span class="badge packaging">'+counts.packaging+' Packaging</span>';
@@ -1325,9 +1341,12 @@
   }
 
   function renderStationPanel(stNum){
-    var info = state.stations[stNum] || {};
     var meals = mealsForStation(stNum);
-    var crewLine = [info.employee1, info.employee2].filter(Boolean).join(" & ");
+    var crewSet = [];
+    meals.forEach(function(m){
+      (m.employees||[]).forEach(function(e){ if(e && crewSet.indexOf(e)===-1) crewSet.push(e); });
+    });
+    var crewLine = crewSet.join(" & ");
     var current = pickCurrentMeal(meals);
     var body = "";
 
