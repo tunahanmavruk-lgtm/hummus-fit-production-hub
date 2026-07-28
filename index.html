@@ -138,6 +138,14 @@
   .badge.packaging{ background:var(--amber-tint); color:var(--amber); }
   .badge.finished{ background:var(--green-tint); color:var(--green); }
 
+  .ga-date-group{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-top:12px; }
+  .ga-date-header{ font-weight:800; font-size:14px; margin-bottom:10px; }
+  .ga-date-header .hint{ font-weight:600; color:var(--text-dim); font-size:12.5px; }
+  .ga-meal-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--border); flex-wrap:wrap; }
+  .ga-meal-row:first-of-type{ border-top:none; }
+  .ga-meal-name{ font-weight:700; font-size:13.5px; flex:1; min-width:160px; }
+  .ga-meal-crew{ font-size:12.5px; color:var(--text-dim); }
+
   /* Operating panel */
   .back-link{ display:inline-flex; align-items:center; gap:6px; color:var(--blue); font-weight:700; font-size:14.5px; margin-bottom:14px; }
   .panel-card{ background:var(--card); border:1px solid var(--border); border-radius:20px; padding:20px; margin-bottom:16px; }
@@ -318,6 +326,7 @@
       <div id="productionGrid">
         <div class="view-title">Stations <span class="hint">Tap a station to open it</span></div>
         <div id="stationGrid"></div>
+        <div id="getAheadSection"></div>
       </div>
       <div id="productionPanel" style="display:none;">
         <button class="back-link" id="btnBackToStations">&larr; All Stations</button>
@@ -521,6 +530,7 @@
   // In-memory only for the whole session — no localStorage/sessionStorage.
   var state = {
     meals: [],
+    getAheadMeals: [],
     stations: {},
     inventoryRows: [],
     lastSyncTime: null,
@@ -658,7 +668,25 @@
   /* ============================================================
      PARSE: Station Assignments tab
   ============================================================ */
-  function parseStationSheet(csvText){
+  // Extracts an "MM-DD" (or "MM/DD") date out of a separator label like
+  // "STATION 9 - MEALS PACKED ON 07-27", so meals under that label can be
+  // correctly attributed to the day they were ACTUALLY worked, not the
+  // day whose tab they happen to be filed under.
+  function extractPackedOnDate(label){
+    var m = label.match(/pack(?:ed|aged)?\s*(?:on)?\s*(\d{1,2})[\/\-](\d{1,2})/i);
+    if(!m) return null;
+    return { month: parseInt(m[1],10), day: parseInt(m[2],10) };
+  }
+  // Compares a parsed {month,day} against the sheet's own "YYYY-MM-DD"
+  // tab name — true if they're the SAME calendar day, meaning no
+  // get-ahead override actually applies.
+  function isSameAsSheetDate(packedOn, sheetDateStr){
+    if(!packedOn || !sheetDateStr) return true;
+    var m = sheetDateStr.match(/^\d{4}-(\d{2})-(\d{2})/);
+    if(!m) return true;
+    return parseInt(m[1],10) === packedOn.month && parseInt(m[2],10) === packedOn.day;
+  }
+  function parseStationSheet(csvText, sheetDateStr){
     var rows = parseCSV(csvText);
     var meals = [];
     var stations = {};
@@ -684,6 +712,7 @@
     if(headerIdx === -1) return { meals: meals, stations: stations };
     var map = buildColMap(rows[headerIdx]);
     var currentStationFromSeparator = "";
+    var currentPackedOnOverride = null; // {month,day} while under a "packed on X" label, else null
     var orderCounter = 0;
 
     for(var i2=headerIdx+1;i2<rows.length;i2++){
@@ -696,6 +725,12 @@
       if(/^station\s*\d+/i.test(first) || /^meals pack/i.test(first)){
         var sm = first.match(/station\s*(\d+)/i);
         currentStationFromSeparator = sm ? sm[1] : currentStationFromSeparator;
+        // A "packed on X" label means everything under it, until the next
+        // separator, was actually worked on THAT day, regardless of which
+        // tab it's filed under — reset to null on a plain "STATION N"
+        // separator with no date, so the override doesn't leak past its
+        // own section.
+        currentPackedOnOverride = extractPackedOnDate(first);
         continue;
       }
       if(/^\(.*\)$/.test(first)) continue;
@@ -712,12 +747,15 @@
       var endTimeRaw = col(row, map, "end_time", 7);
       var unitsCompletedRaw = col(row, map, "units_completed", 8);
       var statusRaw = col(row, map, "status", 9);
+      var isGetAhead = !isSameAsSheetDate(currentPackedOnOverride, sheetDateStr);
 
       meals.push({
         mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned",
         employees: [emp1, emp2].filter(Boolean), eligibleStations: eligible, sourceNotes: notes,
         startPrepRaw: startPrepRaw, startTimeRaw: startTimeRaw, endTimeRaw: endTimeRaw,
         unitsCompletedRaw: unitsCompletedRaw, statusRaw: statusRaw,
+        isGetAhead: isGetAhead,
+        packedOnLabel: isGetAhead ? (pad2(currentPackedOnOverride.month) + "/" + pad2(currentPackedOnOverride.day)) : null,
         order: orderCounter++
       });
     }
@@ -810,6 +848,7 @@
       if(existingByKey[key]){
         var ex = existingByKey[key];
         ex.eligibleStations = fm.eligibleStations; ex.sourceNotes = fm.sourceNotes; ex.employees = fm.employees; ex.order = fm.order;
+        ex.isGetAhead = fm.isGetAhead; ex.packedOnLabel = fm.packedOnLabel;
         applySheetGates(ex, fm, invMap);
         merged.push(ex);
       } else {
@@ -822,6 +861,7 @@
           id: key + "::" + Math.floor(Math.random()*1e9),
           mealName: fm.mealName, batchNum: fm.batchNum, station: fm.station, employees: fm.employees,
           eligibleStations: fm.eligibleStations, sourceNotes: fm.sourceNotes, order: fm.order,
+          isGetAhead: fm.isGetAhead, packedOnLabel: fm.packedOnLabel,
           startTime: null, endTime: null, stationUnits: 0,
           batchTarget: hist ? Math.round(hist.avgUnits) : null,
           batchTargetIsEstimate: !!hist,
@@ -959,7 +999,7 @@
       fetch(csvUrl(config.stationSheetId, stationTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("station tab fetch failed")); }),
       fetch(csvUrl(config.inventorySheetId, inventoryTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("inventory tab fetch failed")); })
     ]).then(function(results){
-      var stationParsed = parseStationSheet(results[0]);
+      var stationParsed = parseStationSheet(results[0], stationTabName(dayDate));
       var invRows = parseInventorySheet(results[1]);
       var invByKey = {};
       invRows.forEach(function(r){
@@ -1086,9 +1126,17 @@
     });
   }
   function applyStationCsv(csvText){
-    var parsed = parseStationSheet(csvText);
+    var parsed = parseStationSheet(csvText, state.resolvedStationTabName);
     var invMap = buildInventoryMap(state.inventoryRows);
     mergeMeals(parsed.meals, invMap); state.stations = parsed.stations; recomputeStages();
+    // Get-ahead meals (prepped early, filed under a "packed on X" label)
+    // shouldn't count toward TODAY's live shift pace — they'd make an
+    // early shift look artificially fast before it's even really
+    // started. Split them out here so every existing KPI/station
+    // calculation downstream, which already reads state.meals, is
+    // automatically correct without needing separate changes everywhere.
+    state.getAheadMeals = state.meals.filter(function(m){ return m.isGetAhead; });
+    state.meals = state.meals.filter(function(m){ return !m.isGetAhead; });
   }
   function applyInventoryCsv(csvText){ state.inventoryRows = parseInventorySheet(csvText); }
 
@@ -1330,6 +1378,42 @@
     }).join("");
   }
 
+  // Get-ahead meals are real, completed work — just done on a different
+  // day than the tab they're filed under. They're deliberately NOT
+  // called "Station 9" (there's no such physical station, and the label
+  // suggested one existed when it doesn't) and NOT mixed into today's
+  // live shift numbers (see applyStationCsv) — shown here instead, as
+  // its own clearly-dated section, so the work is visible without
+  // skewing today's actual pace.
+  function renderGetAheadSection(){
+    var el = document.getElementById("getAheadSection");
+    var meals = state.getAheadMeals || [];
+    if(!meals.length){ el.innerHTML = ""; return; }
+    var byDate = {};
+    meals.forEach(function(m){
+      var d = m.packedOnLabel || "unknown date";
+      if(!byDate[d]) byDate[d] = [];
+      byDate[d].push(m);
+    });
+    var sections = Object.keys(byDate).map(function(dateLabel){
+      var dayMeals = byDate[dateLabel];
+      var finishedCount = dayMeals.filter(function(m){ return m.stage === "finished"; }).length;
+      var rows = dayMeals.map(function(m){
+        var crew = (m.employees||[]).join(" & ") || "Unassigned crew";
+        return '<div class="ga-meal-row">'
+          + '<span class="ga-meal-name">'+escapeHtml(m.mealName)+'</span>'
+          + '<span class="ga-meal-crew">'+escapeHtml(crew)+'</span>'
+          + '<span class="ga-meal-stage badge '+m.stage.replace(/_/g,"")+'">'+escapeHtml(m.stage.replace("_"," "))+'</span>'
+          + '</div>';
+      }).join("");
+      return '<div class="ga-date-group">'
+        + '<div class="ga-date-header">🎯 Get-Ahead Prep — packed '+escapeHtml(dateLabel)+' <span class="hint">('+finishedCount+' of '+dayMeals.length+' finished)</span></div>'
+        + rows
+        + '</div>';
+    }).join("");
+    el.innerHTML = '<div class="view-title" style="margin-top:24px;">Prepped Ahead of Schedule</div>' + sections;
+  }
+
   function pickCurrentMeal(meals){
     var inProgress = meals.filter(function(m){ return m.stage === "in_progress"; });
     if(inProgress.length) return inProgress[0];
@@ -1551,6 +1635,7 @@
     renderKpis();
     renderSummaryCounts();
     renderStationGrid();
+    renderGetAheadSection();
     if(state.activeStation) renderStationPanel(state.activeStation);
     renderPackagingView();
     renderFinishedView();
