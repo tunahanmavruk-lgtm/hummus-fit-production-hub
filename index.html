@@ -1009,6 +1009,12 @@
       });
       var runs = [];
       stationParsed.meals.forEach(function(fm){
+        // Same standard as today's live numbers: a get-ahead meal
+        // (prepped early, filed under a different day's tab) shouldn't
+        // count as a normal same-day run when building the historical
+        // averages that feed the auto-goal — its timing pattern is
+        // different by design and would skew what "typical" looks like.
+        if(fm.isGetAhead) return;
         var startTime = parseTimeOnDate(fm.startTimeRaw, dayDate);
         if(!startTime) return;
         var invHit = invByKey[invKey(fm.mealName, fm.batchNum)];
