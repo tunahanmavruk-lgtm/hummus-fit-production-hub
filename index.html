@@ -1255,9 +1255,16 @@
   // back to the Settings field only if no meal has a startTime yet (i.e.
   // nothing has started).
   function effectiveShiftStart(){
+    var now = new Date();
     var earliest = null;
     state.meals.forEach(function(m){
-      if(m.startTime && (!earliest || m.startTime < earliest)) earliest = m.startTime;
+      // Ignore a startTime that's in the future relative to right now — that
+      // can only be stale/leftover data (e.g. a "Complete" row carried over
+      // from a template with an afternoon timestamp read on an early-morning
+      // shift), never a genuine shift start. Treating it as real makes
+      // elapsedHours go negative, which the 1-minute floor below then turns
+      // into an absurd rate (completed units / ~0 hours).
+      if(m.startTime && m.startTime <= now && (!earliest || m.startTime < earliest)) earliest = m.startTime;
     });
     return earliest || config.shiftStartTime;
   }
