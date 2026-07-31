@@ -627,15 +627,18 @@
     }
     return -1;
   }
-  // Some days' Station Assignment sheet merges "STATION 1"'s label directly
-  // into the "Meal Name" header cell itself (e.g. "Meal Name STATION 1"),
-  // instead of giving Station 1 its own separator row the way Stations 2-8
-  // get. An exact-match lookup misses that cell entirely and the parser
-  // silently returns zero meals. Match on a cell that STARTS WITH the target
-  // text instead, so both "Meal Name" and "Meal Name STATION 1" are found.
+  // Some days' Station Assignment sheet merges other text directly into the
+  // "Meal Name" header cell itself — e.g. "Meal Name STATION 1" (Station 1's
+  // separator folded in), or "MEAL LIST — grouped by station Meal Name
+  // STATION 1" (a section-title row above the header collapsing into the
+  // same exported cell, putting "Meal Name" in the MIDDLE of the cell, not
+  // the start). An exact-match lookup misses that cell entirely and the
+  // parser silently returns zero meals. Match on a cell that CONTAINS the
+  // target text anywhere, not just at the start, so all of these variants
+  // are found.
   function findHeaderIndexStartsWith(rows, prefix){
     for(var i=0;i<rows.length;i++){
-      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) === 0){ return i; } }
+      for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) !== -1){ return i; } }
     }
     return -1;
   }
