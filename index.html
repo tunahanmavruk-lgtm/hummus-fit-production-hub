@@ -270,7 +270,6 @@
       <div class="logo-dot">H</div>
       <div>
         <h1>Hummus Fit Production Hub</h1>
-        <div class="sub">Read-only from Sheets &middot; no write-back</div>
       </div>
     </div>
     <div class="header-right">
@@ -1217,7 +1216,15 @@
   /* ============================================================
      RENDER helpers
   ============================================================ */
-  function formatTime(d){ if(!d) return ""; return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
+  function formatTime(d){
+    if(!d) return "";
+    return d.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "America/New_York"
+    });
+  }
   function escapeHtml(s){
     return (s==null?"":String(s)).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
