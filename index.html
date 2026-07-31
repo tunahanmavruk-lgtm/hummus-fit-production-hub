@@ -397,6 +397,13 @@
     </div>
 
     <div class="settings-section">
+      <h3>Sync Diagnostics</h3>
+      <div class="help" id="diagSummary">No sync run yet this session.</div>
+      <textarea id="diagPreview" readonly style="width:100%; min-height:120px; margin-top:8px; font-family:monospace; font-size:11px; display:none;"></textarea>
+      <div class="help" style="margin-top:6px;">If Sync shows "Live" but a screen stays empty, open this after tapping Sync and copy everything here — it shows exactly what was fetched from each sheet tab and why the parser found (or didn't find) meal rows.</div>
+    </div>
+
+    <div class="settings-section">
       <h3>Meal History Auto-Refresh</h3>
       <div class="field">
         <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
@@ -524,6 +531,9 @@
     activeStation: null,
     qualityLog: [],       // {mealName, station, result, note, time}
     qualityChecks: {},    // mealId -> {result, time} — last check per meal, drives the selected button state
+    lastStationParse: { headerFound:null },
+    lastInventoryParse: { headerFound:null },
+    diag: null,            // snapshot from the last syncNow() call, for the Settings diagnostics panel
     helpRequests: [],     // {station, time}
     trainingDone: {},      // id -> bool
     recomputedHistory: null,       // filled in once by refreshMealHistoryFromSheets()
@@ -670,7 +680,7 @@
     }
 
     var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
-    if(headerIdx === -1) return { meals: meals, stations: stations };
+    if(headerIdx === -1) return { meals: meals, stations: stations, headerFound:false, rowCount: rows.length };
     var map = buildColMap(rows[headerIdx]);
     var currentStationFromSeparator = "";
     var orderCounter = 0;
@@ -710,13 +720,13 @@
         order: orderCounter++
       });
     }
-    return { meals: meals, stations: stations };
+    return { meals: meals, stations: stations, headerFound:true, headerRowIdx: headerIdx, rowCount: rows.length };
   }
 
   function parseInventorySheet(csvText){
     var rows = parseCSV(csvText);
     var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
-    if(headerIdx === -1) return [];
+    if(headerIdx === -1){ var empty = []; empty.headerFound = false; empty.rowCount = rows.length; return empty; }
     var map = buildColMap(rows[headerIdx]);
     var out = [];
     for(var i=headerIdx+1;i<rows.length;i++){
@@ -729,6 +739,7 @@
         addedToShopify: col(row, map, "added_to_shopify", 6)
       });
     }
+    out.headerFound = true; out.headerRowIdx = headerIdx; out.rowCount = rows.length;
     return out;
   }
 
@@ -1043,12 +1054,13 @@
   }
   function syncNow(){
     setSyncStatus("syncing", "Syncing…");
+    var stationUrl, invUrl;
     resolveGidsAuto().then(function(){
-      var stationUrl = csvUrl(config.stationSheetId, config.stationGid);
-      var invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
+      stationUrl = csvUrl(config.stationSheetId, config.stationGid);
+      invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
       return Promise.all([
-        fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed"); return r.text(); }),
-        fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed"); return r.text(); })
+        fetch(stationUrl).then(function(r){ if(!r.ok) throw new Error("station fetch failed (" + r.status + ")"); return r.text(); }),
+        fetch(invUrl).then(function(r){ if(!r.ok) throw new Error("inventory fetch failed (" + r.status + ")"); return r.text(); })
       ]);
     }).then(function(results){
       // Inventory must be parsed FIRST so its Column E units are available
@@ -1056,6 +1068,22 @@
       // derived from Inventory, not from anything in the Station sheet.
       applyInventoryCsv(results[1]);
       applyStationCsv(results[0]);
+      // Diagnostics snapshot — shown in Settings so a non-technical user can
+      // report exactly what was fetched/parsed without opening DevTools.
+      state.diag = {
+        time: new Date(),
+        stationUrl: stationUrl, invUrl: invUrl,
+        stationTab: state.resolvedStationTabName || "(manual gid)",
+        inventoryTab: state.resolvedInventoryTabName || "(manual gid)",
+        stationGid: config.stationGid, inventoryGid: config.inventoryGid,
+        stationCsvLen: results[0].length, invCsvLen: results[1].length,
+        stationHeaderFound: !!state.lastStationParse.headerFound,
+        invHeaderFound: !!state.lastInventoryParse.headerFound,
+        mealsParsed: state.meals.length,
+        invRowsParsed: state.inventoryRows.length,
+        stationCsvPreview: results[0].slice(0, 500),
+        invCsvPreview: results[1].slice(0, 500)
+      };
       state.lastSyncTime = new Date(); state.syncOk = true;
       var tabHint = state.resolvedStationTabName ? (" · reading " + state.resolvedStationTabName) : "";
       setSyncStatus("live", "Live · synced " + formatTime(state.lastSyncTime) + tabHint);
@@ -1071,15 +1099,24 @@
       state.syncOk = false;
       setSyncStatus("offline", "Sync failed — check Settings / sharing");
       showToast("Sync failed. Check sheet sharing settings or use manual paste in Settings.");
+      state.diag = {
+        time: new Date(), stationUrl: stationUrl, invUrl: invUrl,
+        error: (err && err.message) ? err.message : String(err)
+      };
       console.error(err);
     });
   }
   function applyStationCsv(csvText){
     var parsed = parseStationSheet(csvText);
+    state.lastStationParse = parsed;
     var invMap = buildInventoryMap(state.inventoryRows);
     mergeMeals(parsed.meals, invMap); state.stations = parsed.stations; recomputeStages();
   }
-  function applyInventoryCsv(csvText){ state.inventoryRows = parseInventorySheet(csvText); }
+  function applyInventoryCsv(csvText){
+    var parsed = parseInventorySheet(csvText);
+    state.lastInventoryParse = parsed;
+    state.inventoryRows = parsed;
+  }
 
   /* ============================================================
      ACTIONS — only ever mutate raw fields; stage is derived.
@@ -1645,8 +1682,36 @@
     document.getElementById("cfgInventoryGid").value = config.inventoryGid;
     document.getElementById("cfgAutoRefreshHistory").checked = !!config.autoRefreshHistory;
     document.getElementById("cfgHistoryStatusHint").textContent = state.historyRecomputeStatus;
+    renderDiagPanel();
     openModal("settingsModal");
   });
+
+  // Human-readable dump of the last sync attempt — lets a non-technical
+  // user report exactly what was fetched/parsed without opening DevTools.
+  function renderDiagPanel(){
+    var summaryEl = document.getElementById("diagSummary");
+    var previewEl = document.getElementById("diagPreview");
+    var d = state.diag;
+    if(!d){ summaryEl.textContent = "No sync run yet this session."; previewEl.style.display = "none"; return; }
+    if(d.error){
+      summaryEl.innerHTML = '<strong style="color:var(--red);">Sync failed at ' + formatTime(d.time) + ':</strong> ' + escapeHtml(d.error)
+        + '<br>Station URL: ' + escapeHtml(d.stationUrl||"—") + '<br>Inventory URL: ' + escapeHtml(d.invUrl||"—");
+      previewEl.style.display = "none";
+      return;
+    }
+    summaryEl.innerHTML =
+      '<strong>Last sync: ' + formatTime(d.time) + '</strong><br>'
+      + 'Station tab: ' + escapeHtml(d.stationTab) + ' (gid ' + escapeHtml(d.stationGid) + ') — '
+        + d.stationCsvLen + ' chars fetched, "Meal Name" header ' + (d.stationHeaderFound ? 'FOUND' : '<strong style="color:var(--red);">NOT FOUND</strong>')
+        + ', ' + d.mealsParsed + ' meals parsed<br>'
+      + 'Inventory tab: ' + escapeHtml(d.inventoryTab) + ' (gid ' + escapeHtml(d.inventoryGid) + ') — '
+        + d.invCsvLen + ' chars fetched, "Meal Name" header ' + (d.invHeaderFound ? 'FOUND' : '<strong style="color:var(--red);">NOT FOUND</strong>')
+        + ', ' + d.invRowsParsed + ' rows parsed';
+    previewEl.style.display = "block";
+    previewEl.value =
+      "STATION CSV preview (first 500 chars):\n" + d.stationCsvPreview
+      + "\n\n---\n\nINVENTORY CSV preview (first 500 chars):\n" + d.invCsvPreview;
+  }
 
   document.getElementById("btnForceRecomputeHistory").addEventListener("click", function(){
     state.historyRecomputeDone = false; // clear the once-per-session guard
