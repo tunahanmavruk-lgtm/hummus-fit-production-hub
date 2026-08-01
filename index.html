@@ -801,12 +801,27 @@
   // to null is the explicit ✕ clear controls — after which this same logic
   // (or a future tap) is free to re-derive it on the next pass.
   function applySheetGates(m, fm, invMap){
+    // The checkbox/status columns are reliable stage gates even when the
+    // time cell next to them is garbage (a real example: someone typed the
+    // DATE "7/31/2026" into an End Time cell instead of a time). When the
+    // raw text won't parse, still advance the stage — don't block real
+    // progress on a typo — but stamp it with "right now" and flag it as
+    // NOT a real timestamp. Anything computing elapsed time or "how long
+    // since the last real activity" (effectiveShiftStart, the staleness
+    // check) must skip fabricated timestamps, or one bad cell corrupts
+    // those calculations forever — every sync re-reads that same bad cell
+    // and re-fabricates "now" as if it were fresh activity, which is
+    // exactly what was masking real staleness here.
     if(!m.startTime && /^true$/i.test(fm.startPrepRaw || "")){
-      m.startTime = parseTimeToDateToday(fm.startTimeRaw) || new Date();
+      var parsedStart = parseTimeToDateToday(fm.startTimeRaw);
+      m.startTime = parsedStart || new Date();
+      m.startTimeIsReal = !!parsedStart;
       m.startFromSheet = true;
     }
     if(!m.endTime && /complete/i.test(fm.statusRaw || "")){
-      m.endTime = parseTimeToDateToday(fm.endTimeRaw) || new Date();
+      var parsedEnd = parseTimeToDateToday(fm.endTimeRaw);
+      m.endTime = parsedEnd || new Date();
+      m.endTimeIsReal = !!parsedEnd;
       m.endFromSheet = true;
     }
     if(m.packagingUnits == null){
@@ -854,7 +869,8 @@
           batchTarget: hist ? Math.round(hist.avgUnits) : null,
           batchTargetIsEstimate: !!hist,
           packagingUnits: null, finishedTime: null,
-          startFromSheet: false, endFromSheet: false, unitsFromSheet: false
+          startFromSheet: false, endFromSheet: false, unitsFromSheet: false,
+          startTimeIsReal: false, endTimeIsReal: false
         };
         applySheetGates(fresh, fm, invMap);
         merged.push(fresh);
@@ -1293,8 +1309,10 @@
       // from a template with an afternoon timestamp read on an early-morning
       // shift), never a genuine shift start. Treating it as real makes
       // elapsedHours go negative, which the 1-minute floor below then turns
-      // into an absurd rate (completed units / ~0 hours).
-      if(m.startTime && m.startTime <= now && (!earliest || m.startTime < earliest)) earliest = m.startTime;
+      // into an absurd rate (completed units / ~0 hours). Also skip a
+      // fabricated "now" stamp from an unparseable sheet cell (see
+      // applySheetGates) — it's not a real shift-start time either.
+      if(m.startTime && m.startTimeIsReal !== false && m.startTime <= now && (!earliest || m.startTime < earliest)) earliest = m.startTime;
     });
     return earliest || config.shiftStartTime;
   }
@@ -1345,11 +1363,16 @@
     // day), surface how long it's been since the last real sheet timestamp
     // (Start Time or End Time, not sync time) so a human can tell live data
     // from stale data at a glance.
+    // Only trust startTime/endTime when they came from an actual parsed
+    // sheet timestamp (or a real tap) — a fabricated "now" stamp (see
+    // applySheetGates: what happens when a time cell contains garbage, like
+    // a date typed where a time belongs) would otherwise get re-picked as
+    // "the most recent activity" on every single sync forever, permanently
+    // masking real staleness.
     var lastActivityTime = null;
     state.meals.forEach(function(m){
-      [m.startTime, m.endTime].forEach(function(t){
-        if(t && t <= now && (!lastActivityTime || t > lastActivityTime)) lastActivityTime = t;
-      });
+      if(m.startTime && m.startTimeIsReal !== false && m.startTime <= now && (!lastActivityTime || m.startTime > lastActivityTime)) lastActivityTime = m.startTime;
+      if(m.endTime && m.endTimeIsReal !== false && m.endTime <= now && (!lastActivityTime || m.endTime > lastActivityTime)) lastActivityTime = m.endTime;
     });
     var minutesSinceActivity = lastActivityTime ? Math.round((now - lastActivityTime) / 60000) : null;
     return {
