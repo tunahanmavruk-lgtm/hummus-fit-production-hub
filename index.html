@@ -768,13 +768,17 @@
 
   // Builds a lookup of the Inventory sheet's Column E (Machine Crew Units)
   // per meal+batch. Only rows with an actual numeric value in that column
-  // count — a blank Column E means "not packaged yet," not zero.
+  // count — a blank Column E means "not packaged yet," not zero. Also
+  // carries the raw "Added to Shopify" timestamp text (e.g. "✓ Jul 31,
+  // 02:59 PM") alongside the unit count — that's the machine crew's own
+  // entry, timestamped when THEY finished verifying the packaged product,
+  // and is the authoritative "Finished" time (see applySheetGates below).
   function buildInventoryMap(invRows){
     var map = {};
     invRows.forEach(function(r){
       var n = parseInt(r.machineCrewUnits, 10);
       if(isNaN(n)) return;
-      map[invKey(r.mealName, r.batchNum)] = n;
+      map[invKey(r.mealName, r.batchNum)] = { units: n, addedToShopifyRaw: r.addedToShopify };
     });
     return map;
   }
@@ -806,10 +810,20 @@
       m.endFromSheet = true;
     }
     if(m.packagingUnits == null){
-      var invUnits = invMap[invKey(fm.mealName, fm.batchNum)];
-      if(invUnits != null){
-        m.packagingUnits = invUnits;
-        m.finishedTime = new Date();
+      var invHit = invMap[invKey(fm.mealName, fm.batchNum)];
+      if(invHit != null){
+        m.packagingUnits = invHit.units;
+        // The real finish time is when the MACHINE CREW verified the
+        // packaged product — that's Inventory's "Added to Shopify" column,
+        // not Station's own End Time (that's when prep work ended and
+        // handed off to packaging, an earlier and different event) and not
+        // "whenever the dashboard happened to sync" (what this used to be,
+        // which made the shift-complete freeze and the "Finished" stamp on
+        // each card show an arbitrary sync time instead of the truth). Only
+        // fall back to sync time if that cell is blank/unparseable, so a
+        // meal still gets marked finished even on a day the timestamp
+        // column wasn't filled in.
+        m.finishedTime = parseShopifyTimestamp(invHit.addedToShopifyRaw, new Date().getFullYear()) || new Date();
         m.unitsFromSheet = true;
       }
     }
@@ -1291,7 +1305,12 @@
     var auto = computeAutoGoalAndRate();
     var goal = (config.dailyGoalOverride != null) ? config.dailyGoalOverride : auto.autoGoal;
     var targetRate = (config.targetRateOverride != null) ? config.targetRateOverride : auto.autoTargetRate;
-    var progressPct = goal > 0 ? Math.min(100, Math.round(completed/goal*100)) : 0;
+    // Math.round(99.7) reads as "100%" on screen while "min behind" still
+    // correctly treats the shift as short of goal — a real 22-units-short
+    // day looks self-contradictory ("100%" next to "319 min behind"). Only
+    // show 100% once completed has actually reached goal; round everything
+    // below that down instead, so "100%" and "shift complete" always agree.
+    var progressPct = goal > 0 ? (completed >= goal ? 100 : Math.min(99, Math.floor(completed/goal*100))) : 0;
     var now = new Date();
     var shiftStart = effectiveShiftStart();
     var elapsedHours = Math.max((now - shiftStart) / 3600000, 1/60);
