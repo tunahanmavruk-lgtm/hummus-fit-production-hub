@@ -252,6 +252,12 @@
 </style>
 </head>
 <body>
+<!-- Temporary read-only debug snapshot, updated every renderAll(). Not
+     visible to staff (display:none) and carries no interactive controls;
+     purely a text dump so a live diagnosis can read app state through the
+     DOM (works across JS execution contexts, unlike a window global). Safe
+     to remove once the current diagnosis is finished. -->
+<div id="__debugState" style="display:none"></div>
 <div id="app">
 
   <header>
@@ -1742,6 +1748,17 @@
     renderQualityView();
     renderHelpView();
     renderTrainingView();
+    var dbg = document.getElementById("__debugState");
+    if(dbg){
+      dbg.textContent = JSON.stringify({
+        meals: state.meals,
+        inventoryRows: state.inventoryRows,
+        currentTabDate: state.currentTabDate,
+        resolvedStationTabName: state.resolvedStationTabName,
+        resolvedInventoryTabName: state.resolvedInventoryTabName,
+        lastSyncTime: state.lastSyncTime
+      });
+    }
   }
 
   /* ============================================================
@@ -1928,23 +1945,6 @@
   setInterval(syncNow, 5*60*1000);
 
   renderAll();
-
-  // Temporary read-only debug hook — exposes a snapshot of in-memory state
-  // so a stuck-record issue can be inspected live without needing to add
-  // console.log statements or guess from the UI alone. Read-only: returns a
-  // deep-cloned snapshot, never the live objects, so nothing external can
-  // accidentally mutate app state through this. Safe to leave in; remove
-  // later once the current diagnosis is done if you'd rather not ship it
-  // permanently.
-  window.__debugDump = function(){
-    return JSON.parse(JSON.stringify({
-      meals: state.meals,
-      inventoryRows: state.inventoryRows,
-      currentTabDate: state.currentTabDate,
-      resolvedStationTabName: state.resolvedStationTabName,
-      resolvedInventoryTabName: state.resolvedInventoryTabName
-    }));
-  };
 })();
 </script>
 </body>
