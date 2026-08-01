@@ -908,6 +908,19 @@
   // half is an expiration date that varies day to day and can't be
   // predicted, so match on the fixed weekday+month+day PREFIX only.
   function inventoryTabPrefix(d){ return WEEKDAY_ABBR[d.getDay()] + " " + MONTH_ABBR[d.getMonth()] + " " + d.getDate(); }
+  // Inventory tab titles are sometimes zero-padded ("Sat Aug 01 | Exp 8/19")
+  // and sometimes not ("Sat Aug 1 | Exp 8/19") depending on how the sheet
+  // owner typed the tab name. A plain string prefix match only ever caught
+  // one of those two forms, so on every single-digit day (the 1st-9th of a
+  // month) the lookup silently failed to find today's tab and fell back to
+  // whatever gid happened to already be configured (often a stale one from
+  // days ago) instead of erroring loudly. Match with a regex that accepts
+  // an optional leading zero on the day, and require the day be followed by
+  // a non-digit (or end of string) so "Aug 1" doesn't also match "Aug 10".
+  function inventoryTabRegex(d){
+    var weekdayMonth = WEEKDAY_ABBR[d.getDay()] + " " + MONTH_ABBR[d.getMonth()];
+    return new RegExp("^" + weekdayMonth + "\\s+0?" + d.getDate() + "(?:\\D|$)");
+  }
   // Past 11pm, start targeting tomorrow's tab so the next shift's data is
   // already resolved before it starts — this is the "roll over at 11pm"
   // behavior. Before 11pm, target today.
@@ -935,8 +948,8 @@
     return tabs.filter(function(t){ return t.title === name; })[0] || null;
   }
   function findInventoryTab(tabs, d){
-    var prefix = inventoryTabPrefix(d);
-    return tabs.filter(function(t){ return t.title.indexOf(prefix) === 0; })[0] || null;
+    var re = inventoryTabRegex(d);
+    return tabs.filter(function(t){ return re.test(t.title); })[0] || null;
   }
   // Resolves and OVERWRITES config.stationGid / config.inventoryGid in
   // place when a match is found, so the rest of syncNow() doesn't need to
