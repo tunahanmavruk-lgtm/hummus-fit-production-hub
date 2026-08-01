@@ -534,6 +534,7 @@
     lastStationParse: { headerFound:null },
     lastInventoryParse: { headerFound:null },
     diag: null,            // snapshot from the last syncNow() call, for the Settings diagnostics panel
+    currentTabDate: null,   // resolved Station tab date (e.g. "2026-08-01") as of the last sync — detects day rollover so state.meals resets instead of carrying yesterday's progress forward on a recurring menu
     helpRequests: [],     // {station, time}
     trainingDone: {},      // id -> bool
     recomputedHistory: null,       // filled in once by refreshMealHistoryFromSheets()
@@ -1100,6 +1101,25 @@
     setSyncStatus("syncing", "Syncing…");
     var stationUrl, invUrl;
     resolveGidsAuto().then(function(){
+      // Day rollover: the menu repeats, so the SAME meal name + batch # +
+      // station recurs across many different day tabs. mergeMeals() matches
+      // meals by exactly that key, and "fields move forward only" means it
+      // never regresses a field back to null once set — that rule exists so
+      // a same-day re-sync never loses progress mid-shift. But with no
+      // day-awareness at all, it also meant a meal marked Finished on one
+      // day stayed permanently "Finished" on every future day sharing that
+      // same key, because state.meals lives in memory for as long as the
+      // browser tab stays open — carrying yesterday's (or last week's)
+      // progress into a brand new day that hasn't started yet. Reset the
+      // in-memory state whenever the resolved Station tab's date actually
+      // changes from the last sync, so each new day starts clean.
+      if(state.resolvedStationTabName && state.currentTabDate && state.resolvedStationTabName !== state.currentTabDate){
+        state.meals = [];
+        state.qualityLog = [];
+        state.qualityChecks = {};
+        state.helpRequests = [];
+      }
+      if(state.resolvedStationTabName) state.currentTabDate = state.resolvedStationTabName;
       stationUrl = csvUrl(config.stationSheetId, config.stationGid);
       invUrl = csvUrl(config.inventorySheetId, config.inventoryGid);
       return Promise.all([
