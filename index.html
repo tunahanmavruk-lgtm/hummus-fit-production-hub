@@ -750,10 +750,21 @@
      MERGE
   ============================================================ */
   function mealKey(m){ return [lower(m.mealName), norm(m.batchNum), norm(m.station)].join("::"); }
+  // The two sheets don't always spell a meal name identically — e.g. Station
+  // Assignment writes "The Texas Queso Steak Bowl" while Inventory writes
+  // "Texas Queso Steak Bowl" for the exact same batch. A leading article
+  // mismatch like that makes normKey() produce two different strings, so the
+  // join below silently never matches: the meal sits stuck on "Packaging"
+  // forever even after Inventory shows it fully packaged, because
+  // packagingUnits never gets set. Strip a leading "the/a/an " ONLY for this
+  // join key — NOT inside normKey() itself, since normKey() also keys the
+  // baked-in meal-history table, which already has "the ..." entries as
+  // literal keys; changing normKey() globally would break those lookups.
+  function stripLeadingArticle(s){ return s.replace(/^(the|a|an)\s+/, ''); }
   // Inventory rows carry no Station column, so they join to a Station row
   // on (normalized meal name, batch #) only — same join key as the
   // historical analysis used.
-  function invKey(name, batch){ return normKey(name) + "::" + norm(batch); }
+  function invKey(name, batch){ return stripLeadingArticle(normKey(name)) + "::" + norm(batch); }
 
   // Builds a lookup of the Inventory sheet's Column E (Machine Crew Units)
   // per meal+batch. Only rows with an actual numeric value in that column
@@ -1395,7 +1406,18 @@
       var meals = mealsForStation(st);
       var counts = {not_started:0,in_progress:0,packaging:0,finished:0};
       meals.forEach(function(m){ counts[m.stage]++; });
-      var crew = [info.employee1, info.employee2].filter(Boolean).join(" & ") || "Unassigned crew";
+      // state.stations[st] only gets populated from a separate station-roster
+      // "summary" block (a table with a lone "Station" header cell) — some
+      // days' Station Assignment sheet doesn't have that block at all, so
+      // info.employee1/2 stay blank and every station reads "Unassigned
+      // crew" even though Employee 1/Employee 2 are filled in on every meal
+      // row for that station. Fall back to the crew named on this station's
+      // own meal rows before giving up and calling it unassigned.
+      var crew = [info.employee1, info.employee2].filter(Boolean).join(" & ");
+      if(!crew){
+        var mealWithCrew = meals.filter(function(m){ return m.employees && m.employees.length; })[0];
+        crew = mealWithCrew ? mealWithCrew.employees.join(" & ") : "Unassigned crew";
+      }
       var badges = "";
       if(counts.in_progress) badges += '<span class="badge inprogress">'+counts.in_progress+' Running</span>';
       if(counts.packaging) badges += '<span class="badge packaging">'+counts.packaging+' Packaging</span>';
