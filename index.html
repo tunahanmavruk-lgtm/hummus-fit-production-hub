@@ -1193,6 +1193,11 @@
      RENDER helpers
   ============================================================ */
   function formatTime(d){ if(!d) return ""; return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
+  function formatMinutesAgo(mins){
+    if(mins < 60) return mins + "m";
+    var h = Math.floor(mins/60), m = mins % 60;
+    return h + "h" + (m ? " " + m + "m" : "");
+  }
   function escapeHtml(s){
     return (s==null?"":String(s)).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
@@ -1300,11 +1305,29 @@
     }
     var scheduledFinish = new Date(shiftStart.getTime() + config.plannedShiftHours*3600000);
     var deltaMinutes = estFinish ? Math.round((scheduledFinish - estFinish)/60000) : null;
+    // "min behind"/"Estimated Finish" both assume the average rate-to-date
+    // keeps holding into the future. That assumption quietly breaks the
+    // moment the crew actually stops for the day short of the goal — nothing
+    // in the sheet says "we're done," so the projection just keeps sliding
+    // later and "behind" keeps growing every minute the page stays open,
+    // even though no one's working anymore. Rather than guess when that's
+    // happened (a wrong guess hides real lateness on a slow-but-still-active
+    // day), surface how long it's been since the last real sheet timestamp
+    // (Start Time or End Time, not sync time) so a human can tell live data
+    // from stale data at a glance.
+    var lastActivityTime = null;
+    state.meals.forEach(function(m){
+      [m.startTime, m.endTime].forEach(function(t){
+        if(t && t <= now && (!lastActivityTime || t > lastActivityTime)) lastActivityTime = t;
+      });
+    });
+    var minutesSinceActivity = lastActivityTime ? Math.round((now - lastActivityTime) / 60000) : null;
     return {
       completed:completed, goal:goal, progressPct:progressPct, rate:Math.round(rate), targetRate:Math.round(targetRate),
       estFinish:estFinish, deltaMinutes:deltaMinutes, shiftComplete:shiftComplete,
       goalIsAuto: config.dailyGoalOverride == null, targetRateIsAuto: config.targetRateOverride == null,
-      mealCount: auto.mealCount, matchedCount: auto.matchedCount
+      mealCount: auto.mealCount, matchedCount: auto.matchedCount,
+      lastActivityTime: lastActivityTime, minutesSinceActivity: minutesSinceActivity
     };
   }
 
@@ -1332,6 +1355,14 @@
     else if(Math.abs(k.deltaMinutes) <= 5){ statusText = "On schedule"; progSub.className = "kpi-sub good"; finSub.className="kpi-sub good"; }
     else if(k.deltaMinutes > 0){ statusText = k.deltaMinutes + " min ahead"; progSub.className = "kpi-sub good"; finSub.className="kpi-sub good"; }
     else { statusText = Math.abs(k.deltaMinutes) + " min behind"; progSub.className = "kpi-sub bad"; finSub.className="kpi-sub bad"; }
+    // Flag when the live "behind"/"finish" numbers are riding on stale sheet
+    // data — 60+ min since the last real Start/End Time means nobody's
+    // likely actively updating the sheet right now, so the projection ahead
+    // is extrapolating from a rate that may no longer be happening.
+    if(!k.shiftComplete && k.minutesSinceActivity != null && k.minutesSinceActivity >= 60){
+      statusText += " · last sheet activity " + formatMinutesAgo(k.minutesSinceActivity) + " ago — may be stale";
+      progSub.className = "kpi-sub bad"; finSub.className = "kpi-sub bad";
+    }
     progSub.textContent = statusText;
     finSub.textContent = statusText;
     document.getElementById("sumShiftStatus").textContent = statusText;
