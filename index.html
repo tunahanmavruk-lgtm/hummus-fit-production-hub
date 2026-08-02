@@ -1362,12 +1362,25 @@
     var auto = computeAutoGoalAndRate();
     var goal = (config.dailyGoalOverride != null) ? config.dailyGoalOverride : auto.autoGoal;
     var targetRate = (config.targetRateOverride != null) ? config.targetRateOverride : auto.autoTargetRate;
+    // The real, ground-truth signal for "the shift is done" is that every
+    // meal synced from today's Station tab has actually reached Finished —
+    // not whether completed units happened to cross the auto-computed goal.
+    // That goal is only an ESTIMATE (sum of each meal's HISTORICAL average
+    // units), and real batches routinely come in smaller or larger than
+    // their own history — a normal day can finish every single meal while
+    // landing under the estimated goal. Gating "shift complete" on
+    // completed >= goal meant a day like that stayed stuck at "78% / 189
+    // min behind" forever even with all 28 meals Finished, because the
+    // estimate simply guessed a bit high. Whether every meal reached
+    // Finished is a fact from the sheets, not an estimate — use that.
+    var shiftComplete = state.meals.length > 0 && finished.length === state.meals.length;
     // Math.round(99.7) reads as "100%" on screen while "min behind" still
     // correctly treats the shift as short of goal — a real 22-units-short
-    // day looks self-contradictory ("100%" next to "319 min behind"). Only
-    // show 100% once completed has actually reached goal; round everything
-    // below that down instead, so "100%" and "shift complete" always agree.
-    var progressPct = goal > 0 ? (completed >= goal ? 100 : Math.min(99, Math.floor(completed/goal*100))) : 0;
+    // day looks self-contradictory ("100%" next to "319 min behind"). Show
+    // 100% once the shift is actually complete OR completed has reached
+    // goal, whichever comes first; round everything else down, so "100%"
+    // and "shift complete" always agree.
+    var progressPct = shiftComplete ? 100 : (goal > 0 ? Math.min(99, Math.floor(completed/goal*100)) : 0);
     var now = new Date();
     var shiftStart = effectiveShiftStart();
     var elapsedHours = Math.max((now - shiftStart) / 3600000, 1/60);
@@ -1381,7 +1394,6 @@
     // the real timestamp of the LAST meal that actually finished instead —
     // that's the true finish time, and it stops moving once the shift is
     // actually over.
-    var shiftComplete = goal > 0 && completed >= goal && finished.length > 0;
     var estFinish;
     if(shiftComplete){
       estFinish = finished.reduce(function(latest, m){
