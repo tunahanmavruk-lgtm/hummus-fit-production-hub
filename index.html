@@ -535,6 +535,7 @@
     lastInventoryParse: { headerFound:null },
     diag: null,            // snapshot from the last syncNow() call, for the Settings diagnostics panel
     currentTabDate: null,   // resolved Station tab date (e.g. "2026-08-01") as of the last sync — detects day rollover so state.meals resets instead of carrying yesterday's progress forward on a recurring menu
+    noShiftToday: false,   // true when auto-lookup is active and today has no Station tab at all (e.g. a non-production day) — distinct from a sync error or manual-gid mode
     helpRequests: [],     // {station, time}
     trainingDone: {},      // id -> bool
     recomputedHistory: null,       // filled in once by refreshMealHistoryFromSheets()
@@ -956,6 +957,9 @@
   // know whether the gid came from auto-lookup or manual entry. Never
   // throws — logs and falls back to whatever gid was already configured.
   function resolveGidsAuto(){
+    // Manual-gid mode (no API key) is a deliberate choice, not a missing
+    // tab — never treat it as "no shift today".
+    state.noShiftToday = false;
     if(!norm(config.sheetsApiKey)){ return Promise.resolve(); }
     var target = targetDateForNow();
     return Promise.all([
@@ -975,6 +979,17 @@
       }
       state.resolvedStationTabName = sHit ? sHit.title : null;
       state.resolvedInventoryTabName = iHit ? iHit.title : null;
+      // A day with genuinely NO Station tab (a non-production day like a
+      // Sunday the kitchen doesn't run) must not fall through to whatever
+      // config.stationGid already happened to hold — that was still the
+      // very first hardcoded default gid from before auto-lookup existed
+      // on a day neither yesterday's nor today's tab resolved, so the
+      // dashboard kept fetching and displaying THAT unrelated old tab's
+      // data under a "Live" banner as if a real shift were in progress.
+      // Only overwrite the working gid when a real match was found, and
+      // set an explicit flag so syncNow() can show "no shift today"
+      // instead of quietly reusing stale/unrelated numbers.
+      state.noShiftToday = !sHit;
       if(sHit) config.stationGid = sHit.gid;
       if(iHit) config.inventoryGid = iHit.gid;
       if(!sHit || !iHit){
@@ -1114,6 +1129,27 @@
     setSyncStatus("syncing", "Syncing…");
     var stationUrl, invUrl;
     resolveGidsAuto().then(function(){
+      // A day with no Station tab at all (state.noShiftToday, set inside
+      // resolveGidsAuto) means there's genuinely no shift scheduled today —
+      // e.g. a Sunday the kitchen doesn't run. Don't fetch/parse using
+      // whatever gid happens to still be sitting in config (that used to
+      // silently redisplay old or unrelated data as if it were a live
+      // shift). Clear the board, mark it plainly, and skip the fetch
+      // entirely. The sentinel tab-date value ensures that whenever a real
+      // tab DOES show up again (tomorrow's shift), the day-rollover check
+      // below still fires and starts that day clean.
+      if(state.noShiftToday){
+        state.meals = []; state.qualityLog = []; state.qualityChecks = {}; state.helpRequests = [];
+        state.inventoryRows = [];
+        state.lastStationParse = { headerFound:null };
+        state.lastInventoryParse = { headerFound:null };
+        state.currentTabDate = "__no_shift__";
+        state.diag = { time: new Date(), note: "No Station Assignment tab found for today's date — treating this as a non-production day. If a shift IS scheduled today, check that today's dated tab exists in the Station Assignment sheet." };
+        state.lastSyncTime = new Date(); state.syncOk = true;
+        setSyncStatus("live", "No shift scheduled today");
+        renderAll();
+        return Promise.reject({ __noShiftToday: true });
+      }
       // Day rollover: the menu repeats, so the SAME meal name + batch # +
       // station recurs across many different day tabs. mergeMeals() matches
       // meals by exactly that key, and "fields move forward only" means it
@@ -1173,6 +1209,10 @@
       // averages instead of the baked-in table wherever it found data.
       Promise.resolve(refreshMealHistoryFromSheets()).then(function(){ renderAll(); });
     }).catch(function(err){
+      // Not a real failure — resolveGidsAuto already rendered the "no
+      // shift today" state above and deliberately short-circuited here to
+      // skip the fetch. Nothing left to do.
+      if(err && err.__noShiftToday) return;
       state.syncOk = false;
       setSyncStatus("offline", "Sync failed — check Settings / sharing");
       showToast("Sync failed. Check sheet sharing settings or use manual paste in Settings.");
@@ -1485,7 +1525,9 @@
     var grid = document.getElementById("stationGrid");
     var stNums = stationsSorted();
     if(!stNums.length){
-      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;"><span class="big">🔌</span>No station data yet. Tap Sync or check Settings.</div>';
+      grid.innerHTML = state.noShiftToday
+        ? '<div class="empty-state" style="grid-column:1/-1;"><span class="big">📅</span>No shift scheduled today — no Station Assignment tab found for today\'s date.</div>'
+        : '<div class="empty-state" style="grid-column:1/-1;"><span class="big">🔌</span>No station data yet. Tap Sync or check Settings.</div>';
       return;
     }
     grid.innerHTML = stNums.map(function(st){
