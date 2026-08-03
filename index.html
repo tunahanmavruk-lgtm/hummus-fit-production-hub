@@ -383,8 +383,10 @@
         <input type="number" id="cfgTargetRate" placeholder="Leave blank = auto from today's meals">
         <div class="help" id="cfgTargetRateAutoHint"></div>
       </div>
-      <div class="field"><label>Planned Shift Length (hours)</label><input type="number" id="cfgPlannedHours">
-        <div class="help">Used only to judge "ahead/behind schedule" against Shift Start Time.</div>
+      <div class="field">
+        <label>Planned Shift Length Override (hours)</label>
+        <input type="number" step="0.1" id="cfgPlannedHours" placeholder="Leave blank = auto from recent days' history">
+        <div class="help" id="cfgPlannedHoursAutoHint"></div>
       </div>
       <div class="field"><label>Shift Start Time</label><input type="time" id="cfgShiftStart"></div>
     </div>
@@ -485,9 +487,18 @@
     // leave as null to keep auto-calculating from the meal mix.
     dailyGoalOverride: null,
     targetRateOverride: null,
-    plannedShiftHours: 8,
+    // Planned Shift Length used to default to a flat 8 hours for every day,
+    // but real shift length varies day to day (a big BBQ Chicken batch day
+    // runs longer than a light day) — comparing "on schedule" against a
+    // fixed 8h made "ahead/behind" and the finish-time estimate wrong on
+    // any day that wasn't exactly 8 hours by coincidence. Leave this null
+    // to use the auto-recomputed average of recent real shifts' actual
+    // start-to-last-finish span (see state.recomputedShiftHours); set it
+    // to a number to pin a manual override instead.
+    plannedShiftHoursOverride: null,
     shiftStartTime: (function(){ var d = new Date(); d.setSeconds(0,0); return d; })()
   };
+  var DEFAULT_PLANNED_SHIFT_HOURS = 8; // last-resort fallback before any history has been recomputed
 
   /* ============================================================
      MEAL HISTORY — computed once from this week's actual production
@@ -540,6 +551,8 @@
     trainingDone: {},      // id -> bool
     recomputedHistory: null,       // filled in once by refreshMealHistoryFromSheets()
     recomputedHistoryFallback: null,
+    recomputedShiftHours: null,    // average real start-to-last-finish span (hours) across recent days, from that same recompute
+    recomputedShiftHoursSampleSize: 0,
     historyRecomputeDone: false,
     historyRecomputeStatus: "Using built-in defaults"
   };
@@ -1041,6 +1054,7 @@
         invByKey[invKey(r.mealName, r.batchNum)] = { units: n, addedToShopifyRaw: r.addedToShopify };
       });
       var runs = [];
+      var earliestStart = null, latestPackaged = null;
       stationParsed.meals.forEach(function(fm){
         var startTime = parseTimeOnDate(fm.startTimeRaw, dayDate);
         if(!startTime) return;
@@ -1051,8 +1065,19 @@
         var totalMinutes = (packagedAt - startTime) / 60000;
         if(totalMinutes <= 0 || totalMinutes > 20*60) return;
         runs.push({ mealName: fm.mealName, units: invHit.units, totalMinutes: totalMinutes });
+        if(!earliestStart || startTime < earliestStart) earliestStart = startTime;
+        if(!latestPackaged || packagedAt > latestPackaged) latestPackaged = packagedAt;
       });
-      return runs;
+      // Whole-day shift span for THIS historical day — first real Start
+      // Time to last real packaged timestamp — used to learn how long a
+      // real shift actually tends to run, instead of assuming every day
+      // is the same fixed number of hours.
+      var shiftHours = null;
+      if(earliestStart && latestPackaged){
+        var span = (latestPackaged - earliestStart) / 3600000;
+        if(span > 0 && span <= 20) shiftHours = span;
+      }
+      return { runs: runs, shiftHours: shiftHours };
     });
   }
 
@@ -1074,12 +1099,22 @@
       var dayPromises = candidateDates.map(function(d){
         var sHit = findStationTab(stationTabs, d);
         var iHit = findInventoryTab(invTabs, d);
-        if(!sHit || !iHit) return Promise.resolve([]); // missing tab that day — just skip it
-        return fetchHistoricalDayRuns(sHit, iHit, d).catch(function(){ return []; });
+        if(!sHit || !iHit) return Promise.resolve({ runs: [], shiftHours: null }); // missing tab that day — just skip it
+        return fetchHistoricalDayRuns(sHit, iHit, d).catch(function(){ return { runs: [], shiftHours: null }; });
       });
 
-      return Promise.all(dayPromises).then(function(perDayRuns){
-        var allRuns = [].concat.apply([], perDayRuns);
+      return Promise.all(dayPromises).then(function(perDay){
+        var allRuns = [].concat.apply([], perDay.map(function(p){ return p.runs; }));
+        // Average how long a real shift actually ran, across recent days
+        // that had enough real data to measure — this is what lets "ahead/
+        // behind schedule" and the finish-time estimate flex per day
+        // instead of assuming every shift is a flat 8 hours.
+        var shiftHourSamples = perDay.map(function(p){ return p.shiftHours; }).filter(function(h){ return h != null; });
+        if(shiftHourSamples.length){
+          var avgShiftHours = shiftHourSamples.reduce(function(s,h){ return s+h; }, 0) / shiftHourSamples.length;
+          state.recomputedShiftHours = Math.round(avgShiftHours*100)/100;
+          state.recomputedShiftHoursSampleSize = shiftHourSamples.length;
+        }
         var byMeal = {};
         allRuns.forEach(function(r){
           var key = normKey(r.mealName);
@@ -1109,7 +1144,9 @@
           };
         }
         state.historyRecomputeStatus = "Recomputed from " + candidateDates.length + " recent day(s): "
-          + Object.keys(recomputed).length + " meals, " + globalRuns + " matched runs (as of " + formatTime(new Date()) + ")";
+          + Object.keys(recomputed).length + " meals, " + globalRuns + " matched runs, "
+          + (state.recomputedShiftHours != null ? (state.recomputedShiftHours + "h avg shift length from " + state.recomputedShiftHoursSampleSize + " day(s)") : "no usable shift-length data")
+          + " (as of " + formatTime(new Date()) + ")";
         console.log(state.historyRecomputeStatus);
       });
     }).catch(function(err){
@@ -1436,7 +1473,16 @@
     } else {
       estFinish = rate > 0 ? new Date(now.getTime() + (remaining/rate)*3600000) : null;
     }
-    var scheduledFinish = new Date(shiftStart.getTime() + config.plannedShiftHours*3600000);
+    // Planned shift length used to be a flat 8 hours for every day, which
+    // made "ahead/behind schedule" wrong on any day that legitimately runs
+    // longer or shorter (a big-batch day vs. a light day). Use the manual
+    // override if set; otherwise use the auto-recomputed average of recent
+    // real shifts' actual start-to-last-finish span; only fall back to a
+    // flat default before any history has been recomputed yet at all.
+    var plannedHours = (config.plannedShiftHoursOverride != null) ? config.plannedShiftHoursOverride
+      : (state.recomputedShiftHours != null ? state.recomputedShiftHours : DEFAULT_PLANNED_SHIFT_HOURS);
+    var plannedHoursIsAuto = config.plannedShiftHoursOverride == null;
+    var scheduledFinish = new Date(shiftStart.getTime() + plannedHours*3600000);
     var deltaMinutes = estFinish ? Math.round((scheduledFinish - estFinish)/60000) : null;
     // "min behind"/"Estimated Finish" both assume the average rate-to-date
     // keeps holding into the future. That assumption quietly breaks the
@@ -1464,6 +1510,7 @@
       completed:completed, goal:goal, progressPct:progressPct, rate:Math.round(rate), targetRate:Math.round(targetRate),
       estFinish:estFinish, deltaMinutes:deltaMinutes, shiftComplete:shiftComplete,
       goalIsAuto: config.dailyGoalOverride == null, targetRateIsAuto: config.targetRateOverride == null,
+      plannedHours: plannedHours, plannedHoursIsAuto: plannedHoursIsAuto,
       mealCount: auto.mealCount, matchedCount: auto.matchedCount,
       lastActivityTime: lastActivityTime, minutesSinceActivity: minutesSinceActivity
     };
@@ -1861,7 +1908,10 @@
     document.getElementById("cfgDailyGoalAutoHint").textContent = "Auto-computed right now: " + auto.autoGoal.toLocaleString() + " units (from " + auto.mealCount + " synced meals, " + auto.matchedCount + " matched to prior history).";
     document.getElementById("cfgTargetRate").value = config.targetRateOverride != null ? config.targetRateOverride : "";
     document.getElementById("cfgTargetRateAutoHint").textContent = "Auto-computed right now: " + auto.autoTargetRate + " units/hr, weighted by today's actual meal mix.";
-    document.getElementById("cfgPlannedHours").value = config.plannedShiftHours;
+    document.getElementById("cfgPlannedHours").value = config.plannedShiftHoursOverride != null ? config.plannedShiftHoursOverride : "";
+    document.getElementById("cfgPlannedHoursAutoHint").textContent = state.recomputedShiftHours != null
+      ? ("Auto-computed right now: " + state.recomputedShiftHours + "h, averaged from " + state.recomputedShiftHoursSampleSize + " recent real day(s) — some days run longer or shorter than others, so this adjusts day to day instead of assuming a flat 8h.")
+      : ("No recomputed shift-length history yet — using the default " + DEFAULT_PLANNED_SHIFT_HOURS + "h until at least one recent day's real data is available.");
     var st = config.shiftStartTime;
     document.getElementById("cfgShiftStart").value = ("0"+st.getHours()).slice(-2)+":"+("0"+st.getMinutes()).slice(-2);
     document.getElementById("cfgSheetsApiKey").value = config.sheetsApiKey || "";
@@ -1921,8 +1971,9 @@
     var rateStr = norm(document.getElementById("cfgTargetRate").value);
     var rateVal = parseFloat(rateStr);
     config.targetRateOverride = (rateStr !== "" && !isNaN(rateVal)) ? rateVal : null;
-    var hrs = parseFloat(document.getElementById("cfgPlannedHours").value);
-    if(!isNaN(hrs)) config.plannedShiftHours = hrs;
+    var hrsStr = norm(document.getElementById("cfgPlannedHours").value);
+    var hrs = parseFloat(hrsStr);
+    config.plannedShiftHoursOverride = (hrsStr !== "" && !isNaN(hrs)) ? hrs : null;
     var timeVal = document.getElementById("cfgShiftStart").value;
     if(timeVal){
       var parts = timeVal.split(":"); var d = new Date();
