@@ -680,25 +680,39 @@
     var meals = [];
     var stations = {};
 
-    var sumHeaderIdx = findHeaderIndex(rows, "station");
+    var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
+    if(headerIdx === -1) return { meals: meals, stations: stations, headerFound:false, rowCount: rows.length };
+
+    // Only look for the crew-summary block ("Station | Employee 1 | Employee 2
+    // | # Meals | Notes") in rows ABOVE the meal list header. Some days' sheet
+    // also has a totals recap section BELOW the meal list ("SUMMARY — TOTALS
+    // PER STATION" with a bare "Station" header cell and per-station
+    // meal-count/units-completed numbers in the next two columns) — if the
+    // search isn't bounded to before the meal list, that totals row can be
+    // mistaken for the crew-summary header, and its numeric columns get
+    // misread as employee names (e.g. Station 1 showing crew "3 & 0" instead
+    // of the real names). Restricting the search to the region before the
+    // meal list avoids that collision. Employee1/2/notes are looked up ONLY
+    // by header name here (no numeric-index fallback) — a blank crew that
+    // falls back to the per-meal employee names (below) is far safer than a
+    // confident wrong answer from guessing a column position.
+    var sumHeaderIdx = findHeaderIndex(rows.slice(0, headerIdx), "station");
     if(sumHeaderIdx > -1){
       var sMap = buildColMap(rows[sumHeaderIdx]);
-      for(var i=sumHeaderIdx+1;i<rows.length;i++){
+      for(var i=sumHeaderIdx+1;i<headerIdx;i++){
         var r = rows[i];
         var stCell = col(r, sMap, "station", 0);
         var m = stCell.match(/station\s*(\d+)/i);
         if(!m) { if(!stCell) continue; else break; }
         var num = m[1];
         stations[num] = {
-          employee1: col(r, sMap, "employee_1", 1),
-          employee2: col(r, sMap, "employee_2", 2),
-          notes: col(r, sMap, "notes", 4)
+          employee1: col(r, sMap, "employee_1"),
+          employee2: col(r, sMap, "employee_2"),
+          notes: col(r, sMap, "notes")
         };
       }
     }
 
-    var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
-    if(headerIdx === -1) return { meals: meals, stations: stations, headerFound:false, rowCount: rows.length };
     var map = buildColMap(rows[headerIdx]);
     var currentStationFromSeparator = "";
     var orderCounter = 0;
