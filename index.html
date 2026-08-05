@@ -1490,8 +1490,8 @@
     // goal, whichever comes first; round everything else down, so "100%"
     // and "shift complete" always agree.
     var progressPct = shiftComplete ? 100 : (goal > 0 ? Math.min(99, Math.floor(completed/goal*100)) : 0);
-    var now = now0;
-    var shiftStart = shiftStartInfo0.time || config.shiftStartTime;
+    var now = new Date();
+    var shiftStart = effectiveShiftStart();
     var elapsedHours = Math.max((now - shiftStart) / 3600000, 1/60);
     var rate = completed / elapsedHours;
     var remaining = Math.max(goal - completed, 0);
