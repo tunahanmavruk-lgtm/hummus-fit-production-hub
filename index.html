@@ -918,7 +918,14 @@
     if(m.startTime) return "in_progress";
     return "not_started";
   }
-  function recomputeStages(){ state.meals.forEach(function(m){ m.stage = getStage(m); }); }
+  function recomputeStages(){
+    var now = new Date();
+    var shiftStartInfo = realShiftStartInfo();
+    state.meals.forEach(function(m){
+      m.stage = getStage(m);
+      m.priorShiftCarryover = isPriorShiftCarryover(m, shiftStartInfo, now);
+    });
+  }
 
   /* ============================================================
      AUTO TAB LOOKUP — resolves each sheet's gid by matching today's (or,
@@ -1424,7 +1431,12 @@
   // so it reflects when the first meal genuinely went in progress. Falls
   // back to the Settings field only if no meal has a startTime yet (i.e.
   // nothing has started).
-  function effectiveShiftStart(){
+  // Returns { time, isReal }. isReal is false when no meal has actually
+  // started yet today and we're just returning the Settings-field fallback
+  // (which is arbitrary page-load time, not a meaningful boundary) — callers
+  // that need to compare OTHER timestamps against the shift boundary (see
+  // isPriorShiftCarryover below) should only do so when isReal is true.
+  function realShiftStartInfo(){
     var now = new Date();
     var earliest = null;
     state.meals.forEach(function(m){
@@ -1438,12 +1450,39 @@
       // applySheetGates) — it's not a real shift-start time either.
       if(m.startTime && m.startTimeIsReal !== false && m.startTime <= now && (!earliest || m.startTime < earliest)) earliest = m.startTime;
     });
-    return earliest || config.shiftStartTime;
+    return { time: earliest, isReal: earliest != null };
+  }
+  function effectiveShiftStart(){
+    var r = realShiftStartInfo();
+    return r.time || config.shiftStartTime;
+  }
+  // A meal's End Time can be real sheet data yet still not belong to TODAY's
+  // shift — e.g. a meal packaged late the previous night whose row got
+  // carried into today's tab still shows that timestamp. Counting its units
+  // toward today's Units Completed/rate/goal would silently inflate today's
+  // numbers with yesterday's work. Only flag this once we have a REAL
+  // observed shift start (see realShiftStartInfo) — without one there's no
+  // trustworthy boundary to compare against, so we don't guess. A timestamp
+  // is prior-shift carryover if it falls before today's shift actually
+  // started, OR if it's still in the future relative to right now (which,
+  // like the startTime case above, can only be stale/leftover data since the
+  // event is marked as already having happened).
+  function isPriorShiftCarryover(m, shiftStartInfo, now){
+    if(!shiftStartInfo.isReal || !m.endTime) return false;
+    return m.endTime < shiftStartInfo.time || m.endTime > now;
   }
 
   function computeKpis(){
+    var now0 = new Date();
+    var shiftStartInfo0 = realShiftStartInfo();
     var finished = state.meals.filter(function(m){ return m.stage === "finished"; });
-    var completed = finished.reduce(function(s,m){ return s + (m.packagingUnits||0); }, 0);
+    // A carryover meal (see isPriorShiftCarryover) IS finished — it still
+    // counts toward "every meal reached Finished" for shiftComplete below —
+    // it just shouldn't add its units to TODAY's completed count, since that
+    // work happened before today's shift started.
+    var completed = finished.reduce(function(s,m){
+      return s + (isPriorShiftCarryover(m, shiftStartInfo0, now0) ? 0 : (m.packagingUnits||0));
+    }, 0);
     var auto = computeAutoGoalAndRate();
     var goal = (config.dailyGoalOverride != null) ? config.dailyGoalOverride : auto.autoGoal;
     var targetRate = (config.targetRateOverride != null) ? config.targetRateOverride : auto.autoTargetRate;
@@ -1466,8 +1505,8 @@
     // goal, whichever comes first; round everything else down, so "100%"
     // and "shift complete" always agree.
     var progressPct = shiftComplete ? 100 : (goal > 0 ? Math.min(99, Math.floor(completed/goal*100)) : 0);
-    var now = new Date();
-    var shiftStart = effectiveShiftStart();
+    var now = now0;
+    var shiftStart = shiftStartInfo0.time || config.shiftStartTime;
     var elapsedHours = Math.max((now - shiftStart) / 3600000, 1/60);
     var rate = completed / elapsedHours;
     var remaining = Math.max(goal - completed, 0);
@@ -1716,6 +1755,16 @@
     if(m.employees && m.employees.length) meta.push(m.employees.join(" & "));
     if(m.startFromSheet||m.endFromSheet||m.unitsFromSheet) meta.push("synced from sheet");
 
+    // A carryover meal's timestamp predates today's shift (or sits in the
+    // future, which is the same tell) — see isPriorShiftCarryover. Its units
+    // are deliberately left out of today's Units Completed/rate/goal so a
+    // late-night packaging run from before today doesn't inflate today's
+    // pace. Make that visible here rather than silent, so it doesn't look
+    // like a meal just vanished from the day's numbers.
+    var carryoverNote = m.priorShiftCarryover
+      ? '<div class="stamp-text" style="color:#b45309;">⚠ Timestamp is from before today\'s shift started — not counted in today\'s totals.</div>'
+      : "";
+
     var actions = "";
     if(m.stage === "packaging"){
       var prefill = m.suggestedUnits != null ? m.suggestedUnits : "";
@@ -1723,11 +1772,13 @@
         + '<input type="number" min="0" inputmode="numeric" placeholder="Units" id="units-'+m.id+'" value="'+prefill+'">'
         + '<button class="btn green" data-action="confirm" data-id="'+m.id+'">✓ Finish</button></div>'
         + '<div class="stamp-row"><span class="stamp-text">Ended '+formatTime(m.endTime)+'</span>'
-        + '<button class="clear-x" data-action="clearEnd" data-id="'+m.id+'" title="Back to In Progress">✕</button></div>';
+        + '<button class="clear-x" data-action="clearEnd" data-id="'+m.id+'" title="Back to In Progress">✕</button></div>'
+        + carryoverNote;
     } else if(m.stage === "finished"){
       actions = '<div class="stamp-row"><span class="stamp-text">'+(m.packagingUnits!=null?m.packagingUnits+' units':'')+(m.finishedTime?' · Finished '+formatTime(m.finishedTime):'')+'</span>'
         + '<button class="edit-pencil" data-action="edit" data-id="'+m.id+'">edit</button>'
-        + '<button class="clear-x" data-action="clearUnits" data-id="'+m.id+'" title="Back to Packaging">✕</button></div>';
+        + '<button class="clear-x" data-action="clearUnits" data-id="'+m.id+'" title="Back to Packaging">✕</button></div>'
+        + carryoverNote;
     }
     return '<div class="meal-card stage-'+m.stage+'" data-mealid="'+m.id+'">'
       + '<div class="meal-head"><div><div class="meal-name">'+escapeHtml(m.mealName)+'</div>'
