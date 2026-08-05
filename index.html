@@ -1043,7 +1043,20 @@
      state.recomputedHistory unset, so getMealHistory() transparently keeps
      using the baked-in MEAL_HISTORY table with no visible disruption.
   ============================================================ */
-  function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/gviz/tq?tqx=out:csv&gid=" + gid; }
+  // Uses the plain CSV export endpoint, not /gviz/tq?tqx=out:csv. Confirmed
+  // directly against the real sheet (Aug 3, 4, and 5 tabs) that gviz
+  // silently drops the leading "STATION ASSIGNMENTS" title row and the
+  // Station/Employee 1/Employee 2/# Meals crew-summary block above the meal
+  // list — cause unconfirmed (frozen/hidden rows are the leading suspect),
+  // but the effect was a real bug: with that block missing, a bottom
+  // "SUMMARY — TOTALS PER STATION" recap (bare "Station" header, meal-count
+  // and units-completed in the next two columns) became the only exact
+  // match for the crew-block lookup, and its numbers got misread as
+  // employee names (see the 2026-08-03 "3 & 0" crew-name fix). The plain
+  // export endpoint included the crew block in every real-day fetch tried
+  // during that investigation and this one — switching to it is the fix at
+  // the source, on top of the header-search bounding already added.
+  function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/export?format=csv&gid=" + gid; }
   function parseStationDateFromTabName(title){
     var m = norm(title).match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if(!m) return null;
