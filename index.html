@@ -315,6 +315,10 @@
         <div class="view-title">Stations <span class="hint">Tap a station to open it</span></div>
         <div id="stationGrid"></div>
       </div>
+      <div id="preppedAheadSection" style="display:none; margin-top:20px;">
+        <div class="view-title">Prepped Ahead for Tomorrow <span class="hint">Read-only — from tomorrow's sheet, not counted in today's totals</span></div>
+        <div id="preppedAheadList"></div>
+      </div>
       <div id="productionPanel" style="display:none;">
         <button class="back-link" id="btnBackToStations">&larr; All Stations</button>
         <div id="panelBody"></div>
@@ -554,7 +558,9 @@
     recomputedShiftHours: null,    // average real start-to-last-finish span (hours) across recent days, from that same recompute
     recomputedShiftHoursSampleSize: 0,
     historyRecomputeDone: false,
-    historyRecomputeStatus: "Using built-in defaults"
+    historyRecomputeStatus: "Using built-in defaults",
+    preppedAhead: [],      // read-only snapshot of tomorrow's Station tab, for meals the crew already started/finished tonight ahead of time. NEVER merged into state.meals and NEVER counted in today's KPIs/goal — purely a visibility panel so "did that get-ahead entry save?" has an answer before the 11pm tab rollover. Refreshed by fetchPreppedAheadTomorrow(), same cadence as the main sync.
+    preppedAheadTabName: null
   };
 
   var STAGE_LABEL = { not_started:"Not Started", in_progress:"In Progress", packaging:"Next Up — Packaging", finished:"Finished" };
@@ -1187,6 +1193,66 @@
   }
 
   /* ============================================================
+     PREPPED-AHEAD LOOKUP — read-only peek at tomorrow's Station tab. Exists
+     because get-ahead prep is sometimes logged straight onto the NEXT day's
+     tab (not today's own "MEALS PACKED ON ..." block), and the main sync
+     only reads today's tab until the 11pm rollover (see targetDateForNow).
+     Without this, a crew that finishes tonight's get-ahead work sees "In
+     Progress" on the dashboard for hours with no way to confirm the sheet
+     actually saved it. This NEVER writes to state.meals, NEVER feeds
+     computeKpis()/the daily goal, and never merges with today's data —
+     it's display-only, rendered in its own section by renderPreppedAhead().
+     Requires the Sheets API key (same as auto tab lookup) since there's no
+     way to guess tomorrow's gid otherwise; silently shows nothing without
+     one rather than erroring.
+  ============================================================ */
+  function fetchPreppedAheadTomorrow(){
+    if(!norm(config.sheetsApiKey)) { state.preppedAhead = []; return Promise.resolve(); }
+    var realToday = new Date(); realToday.setHours(0,0,0,0);
+    var tomorrow = new Date(realToday); tomorrow.setDate(tomorrow.getDate()+1);
+    // Once the main sync has itself rolled over to tomorrow's tab (past
+    // 11pm), tomorrow's data is already the live "today" view — showing it
+    // again here would just duplicate the station grid.
+    if(state.resolvedStationTabName === stationTabName(tomorrow)){ state.preppedAhead = []; return Promise.resolve(); }
+    return Promise.all([
+      fetchSheetTabs(config.stationSheetId, config.sheetsApiKey),
+      fetchSheetTabs(config.inventorySheetId, config.sheetsApiKey)
+    ]).then(function(results){
+      var stationTabs = results[0], invTabs = results[1];
+      var sHit = findStationTab(stationTabs, tomorrow);
+      if(!sHit){ state.preppedAhead = []; return; } // tomorrow's tab doesn't exist yet — nothing to show, not an error
+      var iHit = findInventoryTab(invTabs, tomorrow);
+      return Promise.all([
+        fetch(csvUrl(config.stationSheetId, sHit.gid)).then(function(r){ if(!r.ok) throw new Error("tomorrow station fetch failed"); return r.text(); }),
+        iHit ? fetch(csvUrl(config.inventorySheetId, iHit.gid)).then(function(r){ return r.ok ? r.text() : ""; }).catch(function(){ return ""; }) : Promise.resolve("")
+      ]).then(function(csvResults){
+        var stationParsed = parseStationSheet(csvResults[0]);
+        var invRows = csvResults[1] ? parseInventorySheet(csvResults[1]) : [];
+        var invMap = buildInventoryMap(invRows);
+        var prepped = [];
+        stationParsed.meals.forEach(function(fm){
+          // Fresh throwaway record, run through the exact same gates as a
+          // live meal — never touches state.meals, never persisted.
+          var temp = { startTime:null, endTime:null, packagingUnits:null, finishedTime:null,
+            startFromSheet:false, endFromSheet:false, unitsFromSheet:false, startTimeIsReal:false, endTimeIsReal:false };
+          applySheetGates(temp, fm, invMap);
+          if(!temp.startTime) return; // still "Not Started" — normal for a blank tomorrow tab, not get-ahead prep
+          prepped.push({
+            mealName: fm.mealName, station: fm.station, employees: fm.employees,
+            stage: getStage(temp), packagingUnits: temp.packagingUnits
+          });
+        });
+        state.preppedAhead = prepped;
+        state.preppedAheadTabName = sHit.title;
+      });
+    }).catch(function(err){
+      // Transient fetch/lookup failure — leave whatever was already shown
+      // rather than blanking a section that was correct a moment ago.
+      console.error("Prepped-ahead lookup failed:", err);
+    });
+  }
+
+  /* ============================================================
      FETCH
   ============================================================ */
   function setSyncStatus(mode, text){
@@ -1276,6 +1342,7 @@
       // a few seconds to a minute or so later, using freshly recomputed
       // averages instead of the baked-in table wherever it found data.
       Promise.resolve(refreshMealHistoryFromSheets()).then(function(){ renderAll(); });
+      Promise.resolve(fetchPreppedAheadTomorrow()).then(function(){ renderAll(); });
     }).catch(function(err){
       // Not a real failure — resolveGidsAuto already rendered the "no
       // shift today" state above and deliberately short-circuited here to
@@ -1894,6 +1961,32 @@
     renderQualityView();
     renderHelpView();
     renderTrainingView();
+    renderPreppedAhead();
+  }
+
+  // Read-only view of tomorrow's Station tab, so a get-ahead entry (like a
+  // crew logging units on tomorrow's sheet tonight) is visible immediately
+  // instead of waiting for the 11pm tab rollover. Only meals with real
+  // activity (a Start Prep checkbox already ticked) are shown — a fresh
+  // tomorrow tab full of "Not Started" rows is completely normal and would
+  // just be noise. Hidden entirely when there's nothing to show.
+  function renderPreppedAhead(){
+    var section = document.getElementById("preppedAheadSection");
+    var list = document.getElementById("preppedAheadList");
+    var items = state.preppedAhead || [];
+    if(!items.length){ section.style.display = "none"; return; }
+    section.style.display = "";
+    list.innerHTML = items.map(function(p){
+      var crew = (p.employees||[]).filter(Boolean).join(" & ") || "Unassigned crew";
+      return '<div class="meal-card stage-'+p.stage+'">'
+        + '<div class="meal-head">'
+        + '<div><div class="meal-name">'+escapeHtml(p.mealName)+'</div>'
+        + '<div class="meal-meta">Station '+escapeHtml(p.station)+' · '+escapeHtml(crew)+'</div></div>'
+        + '<span class="meal-stage-label">'+escapeHtml(STAGE_LABEL[p.stage]||p.stage)+'</span>'
+        + '</div>'
+        + (p.packagingUnits!=null ? '<div class="meal-meta" style="margin-top:8px;">'+escapeHtml(p.packagingUnits)+' units packaged</div>' : '')
+        + '</div>';
+    }).join("");
   }
 
   /* ============================================================
