@@ -312,6 +312,10 @@
     <!-- PRODUCTION VIEW -->
     <section class="view active" id="view-production">
       <div id="productionGrid">
+        <div id="needsAttentionSection" style="display:none; margin-bottom:20px;">
+          <div class="view-title" style="color:var(--red);">⚠ Needs Attention <span class="hint">Stuck longer than expected — likely a missed End Time or Inventory entry</span></div>
+          <div id="needsAttentionList"></div>
+        </div>
         <div class="view-title">Stations <span class="hint">Tap a station to open it</span></div>
         <div id="stationGrid"></div>
       </div>
@@ -393,6 +397,11 @@
         <div class="help" id="cfgPlannedHoursAutoHint"></div>
       </div>
       <div class="field"><label>Shift Start Time</label><input type="time" id="cfgShiftStart"></div>
+      <div class="field">
+        <label>Stale Batch Warning (hours)</label>
+        <input type="number" step="0.5" min="0.5" id="cfgStaleHours" placeholder="5">
+        <div class="help">Flags a meal that's sat In Progress or Packaging this long as "Needs Attention" — almost always a missed End Time or Inventory entry, not a real long batch. Never changes the meal's own data.</div>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -500,7 +509,15 @@
     // start-to-last-finish span (see state.recomputedShiftHours); set it
     // to a number to pin a manual override instead.
     plannedShiftHoursOverride: null,
-    shiftStartTime: (function(){ var d = new Date(); d.setSeconds(0,0); return d; })()
+    shiftStartTime: (function(){ var d = new Date(); d.setSeconds(0,0); return d; })(),
+    // A meal stuck In Progress or Packaging for longer than this counts as
+    // "stale" — almost always a crew member forgetting to stamp an End
+    // Time or Inventory confirmation on the sheet, not a real multi-hour
+    // batch. This NEVER changes the meal's own data (no auto-finish, no
+    // fabricated timestamp) — it only drives a visual "Needs Attention"
+    // flag so a forgotten row gets noticed instead of sitting invisible
+    // for a day (see the 2026-08-06 MsWendy Buff Nuggets incident).
+    staleThresholdHours: 5
   };
   var DEFAULT_PLANNED_SHIFT_HOURS = 8; // last-resort fallback before any history has been recomputed
 
@@ -928,6 +945,41 @@
     state.meals.forEach(function(m){
       m.stage = getStage(m);
     });
+  }
+
+  /* ============================================================
+     STALE-BATCH DETECTION — display-only. A meal sitting In Progress or
+     Packaging for longer than config.staleThresholdHours is flagged as
+     "Needs Attention." This NEVER touches the meal's own fields (no
+     auto-finish, no fabricated End Time/units) — only a human editing the
+     sheet or tapping the on-screen controls can actually close a batch out.
+     Exists because a forgotten End Time cell is otherwise indistinguishable
+     from a genuinely still-running batch (see the 2026-08-06 MsWendy Buff
+     Nuggets row, stuck 24+ hours with nobody noticing).
+  ============================================================ */
+  function isStaleMeal(m, now){
+    if(m.stage !== "in_progress" && m.stage !== "packaging") return false;
+    // startTime/endTime are set exactly once (applySheetGates only fills a
+    // null field, "fields move forward only") and never re-stamped on later
+    // syncs — so even a fallback timestamp (a sheet cell that didn't parse,
+    // stamped with "right now" at that first sync) is frozen from then on
+    // and measures real elapsed wall-clock time just as validly as a true
+    // parsed sheet time or an on-screen tap. No need to gate on
+    // startTimeIsReal/endTimeIsReal here — that flag matters for OTHER
+    // calculations that re-derive "now" every sync, not this one.
+    var refTime = m.stage === "in_progress" ? m.startTime : m.endTime;
+    if(!refTime) return false;
+    var hours = (now - refTime) / 3600000;
+    return hours >= (config.staleThresholdHours || 5);
+  }
+  function computeStaleMeals(){
+    var now = new Date();
+    return state.meals.filter(function(m){ return isStaleMeal(m, now); })
+      .sort(function(a,b){
+        var at = a.stage==="in_progress" ? a.startTime : a.endTime;
+        var bt = b.stage==="in_progress" ? b.startTime : b.endTime;
+        return at - bt; // oldest/most-overdue first
+      });
   }
 
   /* ============================================================
@@ -1712,7 +1764,9 @@
         var mealWithCrew = meals.filter(function(m){ return m.employees && m.employees.length; })[0];
         crew = mealWithCrew ? mealWithCrew.employees.join(" & ") : "Unassigned crew";
       }
+      var staleCount = meals.filter(function(m){ return isStaleMeal(m, new Date()); }).length;
       var badges = "";
+      if(staleCount) badges += '<span class="badge" style="background:var(--red-tint); color:var(--red);">⚠ '+staleCount+' Stuck</span>';
       if(counts.in_progress) badges += '<span class="badge inprogress">'+counts.in_progress+' Running</span>';
       if(counts.packaging) badges += '<span class="badge packaging">'+counts.packaging+' Packaging</span>';
       if(counts.finished) badges += '<span class="badge finished">'+counts.finished+' Finished</span>';
@@ -1962,6 +2016,36 @@
     renderHelpView();
     renderTrainingView();
     renderPreppedAhead();
+    renderNeedsAttention();
+  }
+
+  // Read-only "Needs Attention" list — surfaces meals isStaleMeal() flags,
+  // oldest first, so a forgotten End Time/Inventory entry gets noticed
+  // instead of blending into a station tile as an ordinary-looking
+  // "Running"/"Packaging" badge. Tapping an item opens that station's panel
+  // — same as tapping the station tile itself — where staff already have
+  // the real fix controls (complete the batch, or the sheet itself).
+  function renderNeedsAttention(){
+    var section = document.getElementById("needsAttentionSection");
+    var list = document.getElementById("needsAttentionList");
+    var stale = computeStaleMeals();
+    if(!stale.length){ section.style.display = "none"; return; }
+    section.style.display = "";
+    var now = new Date();
+    list.innerHTML = stale.map(function(m){
+      var crew = (m.employees||[]).filter(Boolean).join(" & ") || "Unassigned crew";
+      var refTime = m.stage === "in_progress" ? m.startTime : m.endTime;
+      var waitLabel = m.stage === "in_progress" ? "Started" : "Ended prep";
+      var hoursAgo = Math.floor((now - refTime) / 3600000);
+      return '<button class="meal-card stage-'+m.stage+'" style="width:100%; text-align:left; border-left-color:var(--red);" data-action="openStationFromAttention" data-station="'+escapeHtml(m.station)+'">'
+        + '<div class="meal-head">'
+        + '<div><div class="meal-name">'+escapeHtml(m.mealName)+'</div>'
+        + '<div class="meal-meta">Station '+escapeHtml(m.station)+' · '+escapeHtml(crew)+'</div></div>'
+        + '<span class="meal-stage-label" style="background:var(--red-tint); color:var(--red);">'+hoursAgo+'h+ · '+escapeHtml(STAGE_LABEL[m.stage]||m.stage)+'</span>'
+        + '</div>'
+        + '<div class="meal-meta" style="margin-top:8px;">'+waitLabel+' '+formatTime(refTime)+' — check for a missed End Time or Inventory entry on the sheet.</div>'
+        + '</button>';
+    }).join("");
   }
 
   // Read-only view of tomorrow's Station tab, so a get-ahead entry (like a
@@ -2024,6 +2108,7 @@
       if(val !== null){ var n = parseInt(val,10); if(!isNaN(n) && n !== 0) addUnits(id, n); }
     }
     else if(action === "gotoPackaging") switchView("packaging");
+    else if(action === "openStationFromAttention") openStationPanel(actionEl.getAttribute("data-station"));
     else if(action === "confirm"){
       var input = document.getElementById("units-"+id);
       confirmPackaging(id, input ? input.value : "");
@@ -2058,6 +2143,7 @@
       : ("No recomputed shift-length history yet — using the default " + DEFAULT_PLANNED_SHIFT_HOURS + "h until at least one recent day's real data is available.");
     var st = config.shiftStartTime;
     document.getElementById("cfgShiftStart").value = ("0"+st.getHours()).slice(-2)+":"+("0"+st.getMinutes()).slice(-2);
+    document.getElementById("cfgStaleHours").value = config.staleThresholdHours != null ? config.staleThresholdHours : "";
     document.getElementById("cfgSheetsApiKey").value = config.sheetsApiKey || "";
     document.getElementById("cfgSheetsApiKeyHint").textContent = state.resolvedStationTabName
       ? ("Currently reading: " + state.resolvedStationTabName + " / " + (state.resolvedInventoryTabName||"—") + ". Leave blank to go back to fully manual gid entry below.")
@@ -2118,6 +2204,9 @@
     var hrsStr = norm(document.getElementById("cfgPlannedHours").value);
     var hrs = parseFloat(hrsStr);
     config.plannedShiftHoursOverride = (hrsStr !== "" && !isNaN(hrs)) ? hrs : null;
+    var staleStr = norm(document.getElementById("cfgStaleHours").value);
+    var staleVal = parseFloat(staleStr);
+    config.staleThresholdHours = (staleStr !== "" && !isNaN(staleVal) && staleVal > 0) ? staleVal : 5;
     var timeVal = document.getElementById("cfgShiftStart").value;
     if(timeVal){
       var parts = timeVal.split(":"); var d = new Date();
@@ -2169,6 +2258,7 @@
     document.getElementById("clockTime").textContent = formatTime(now);
     document.getElementById("clockDate").textContent = now.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
     renderKpis();
+    renderNeedsAttention(); // elapsed time keeps growing with no new sync needed
   }
   tickClock();
   setInterval(tickClock, 15000);
