@@ -1662,7 +1662,25 @@
       : (state.recomputedShiftHours != null ? state.recomputedShiftHours : DEFAULT_PLANNED_SHIFT_HOURS);
     var plannedHoursIsAuto = config.plannedShiftHoursOverride == null;
     var scheduledFinish = new Date(shiftStart.getTime() + plannedHours*3600000);
-    var deltaMinutes = estFinish ? Math.round((scheduledFinish - estFinish)/60000) : null;
+    // In the first stretch of a shift, "rate" (completed units / elapsed
+    // hours) is riding on almost no data — most stations haven't had time
+    // to finish a single batch yet, so rate reads near-zero even though
+    // real throughput is about to ramp up. Linearly extrapolating THAT rate
+    // across the full remaining goal produces a nonsense multi-day ETA
+    // (seen live: "Estimated Finish 10:09 AM" / "6690 min behind" at 9:20
+    // AM, 80 minutes into a shift — formatTime() only shows a clock face
+    // with no date, so a projection days in the future still looks like an
+    // innocuous nearby time instead of the red flag it should be). Treat
+    // the projection as unreliable — same bucket as "not enough data yet"
+    // — whenever it implies the WHOLE shift (start to estFinish) would run
+    // more than 3x the planned length. A day that's genuinely, severely
+    // behind can still say so once real elapsed time backs that up; this
+    // only suppresses the earliest-minutes noise where the math hasn't
+    // caught up to reality yet.
+    var impliedTotalHours = estFinish ? (estFinish - shiftStart) / 3600000 : null;
+    var projectionReliable = shiftComplete || remaining <= 0
+      || (impliedTotalHours != null && impliedTotalHours <= plannedHours * 3);
+    var deltaMinutes = (estFinish && projectionReliable) ? Math.round((scheduledFinish - estFinish)/60000) : null;
     // "min behind"/"Estimated Finish" both assume the average rate-to-date
     // keeps holding into the future. That assumption quietly breaks the
     // moment the crew actually stops for the day short of the goal — nothing
@@ -1687,7 +1705,7 @@
     var minutesSinceActivity = lastActivityTime ? Math.round((now - lastActivityTime) / 60000) : null;
     return {
       completed:completed, goal:goal, progressPct:progressPct, rate:Math.round(rate), targetRate:Math.round(targetRate),
-      estFinish:estFinish, deltaMinutes:deltaMinutes, shiftComplete:shiftComplete,
+      estFinish:estFinish, deltaMinutes:deltaMinutes, shiftComplete:shiftComplete, projectionReliable:projectionReliable,
       goalIsAuto: config.dailyGoalOverride == null, targetRateIsAuto: config.targetRateOverride == null,
       plannedHours: plannedHours, plannedHoursIsAuto: plannedHoursIsAuto,
       mealCount: auto.mealCount, matchedCount: auto.matchedCount,
@@ -1702,7 +1720,7 @@
     document.getElementById("kpiProgress").textContent = k.progressPct + "%";
     document.getElementById("kpiRate").textContent = k.shiftComplete ? "—" : (k.rate + "/hr");
     document.getElementById("kpiTargetRate").textContent = k.targetRate + (k.targetRateIsAuto ? " (auto)" : "");
-    document.getElementById("kpiFinish").textContent = k.estFinish ? formatTime(k.estFinish) : "--:--";
+    document.getElementById("kpiFinish").textContent = (k.estFinish && k.projectionReliable) ? formatTime(k.estFinish) : "--:--";
     document.getElementById("goalCurrent").textContent = k.completed.toLocaleString();
     document.getElementById("goalTotal").textContent = k.goal.toLocaleString() + (k.goalIsAuto ? " (auto from " + k.mealCount + " meals, " + k.matchedCount + " with history)" : "");
     document.getElementById("goalBarFill").style.width = k.progressPct + "%";
@@ -1710,7 +1728,12 @@
     var progSub = document.getElementById("kpiProgressSub");
     var finSub = document.getElementById("kpiFinishSub");
     var statusText;
-    if(k.deltaMinutes == null){ statusText = "Not enough data yet"; progSub.className = "kpi-sub"; finSub.className="kpi-sub"; }
+    if(k.deltaMinutes == null){
+      statusText = (k.estFinish && !k.projectionReliable)
+        ? "Still warming up — check back after the first few batches finish"
+        : "Not enough data yet";
+      progSub.className = "kpi-sub"; finSub.className="kpi-sub";
+    }
     else if(k.shiftComplete){
       var doneTag = Math.abs(k.deltaMinutes) <= 5 ? "on schedule" : (k.deltaMinutes > 0 ? (k.deltaMinutes + " min early") : (Math.abs(k.deltaMinutes) + " min late"));
       statusText = "Shift complete — finished " + doneTag;
