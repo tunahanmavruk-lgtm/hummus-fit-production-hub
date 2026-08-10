@@ -614,6 +614,15 @@
   }
   function norm(s){ return (s||"").toString().trim(); }
   function lower(s){ return norm(s).toLowerCase(); }
+  // Some days' sheet uses a literal "X" in the Employee 1/2 cell as the
+  // "this slot isn't staffed today" placeholder (e.g. "Station 2, X, X, 0
+  // meals" for a station whose work got folded into others). Treated as a
+  // real name, that joins into a crew line reading "X & X" — technically
+  // what the cell says, but confusing next to every other station's real
+  // names. Strip it to blank here, at the one place both the crew-summary
+  // block and the per-meal Employee 1/2 columns get read, so it falls
+  // through to the same "Unassigned crew" label as a truly blank cell.
+  function stripPlaceholderCrew(s){ return /^x$/i.test(norm(s)) ? "" : norm(s); }
 
   // Parses a time-of-day string as exported by Google Sheets (e.g.
   // "8:03:50 AM") onto a given base date's calendar day — the sheet's own
@@ -729,8 +738,8 @@
         if(!m) { if(!stCell) continue; else break; }
         var num = m[1];
         stations[num] = {
-          employee1: col(r, sMap, "employee_1"),
-          employee2: col(r, sMap, "employee_2"),
+          employee1: stripPlaceholderCrew(col(r, sMap, "employee_1")),
+          employee2: stripPlaceholderCrew(col(r, sMap, "employee_2")),
           notes: col(r, sMap, "notes")
         };
       }
@@ -757,8 +766,8 @@
       var mealName = first;
       var stationAssigned = col(row, map, "station_assigned", 2) || currentStationFromSeparator;
       var batchNum = col(row, map, "batch", 1);
-      var emp1 = col(row, map, "employee_1", 3);
-      var emp2 = col(row, map, "employee_2", 4);
+      var emp1 = stripPlaceholderCrew(col(row, map, "employee_1", 3));
+      var emp2 = stripPlaceholderCrew(col(row, map, "employee_2", 4));
       var eligible = col(row, map, "eligible_stations", row.length-1);
       var notes = col(row, map, "notes", 10);
       var startPrepRaw = col(row, map, "start_prep", 5);
