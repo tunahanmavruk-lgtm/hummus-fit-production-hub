@@ -166,6 +166,12 @@
     </div>
 
     <div class="card">
+      <h2>Team Pairings</h2>
+      <p class="cardSub">Each ACTUAL recorded pair (exactly who was Employee 1 + 2 together), scored as a team — not blended into either person's individual number above.</p>
+      <div id="pairTableWrap"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="card">
       <h2>Per-Meal Average Time</h2>
       <p class="cardSub">Live-recomputed from real Start Time → Inventory "Added to Shopify" timestamps.</p>
       <div id="mealTableWrap"><div class="loading">Loading…</div></div>
@@ -239,6 +245,17 @@ function parseCSV(text){
 function norm(s){ return (s||"").toString().trim(); }
 function lower(s){ return norm(s).toLowerCase(); }
 function stripPlaceholderCrew(s){ return /^x$/i.test(norm(s)) ? "" : norm(s); }
+// Some Employee 1/2 cells have BOTH names typed into one cell instead of
+// split across the two columns (e.g. Employee 1 = "Adriana + Vannesa",
+// Employee 2 blank) — a real pattern seen live on this sheet, not a typo.
+// Left unhandled, "Adriana + Vannesa" becomes its own separate bucket in
+// the employee stats below, fragmenting Adriana's real batch count across
+// however many different compound-cell spellings she appears in — the
+// exact kind of silent misattribution this page exists to avoid. Split on
+// "+", "&", or " and " and treat each side as its own name.
+function splitCompoundNames(s){
+  return norm(s).split(/\s*(?:\+|&|\band\b)\s*/i).map(norm).filter(Boolean);
+}
 function normKey(s){ return (s||"").toString().toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 function stripLeadingArticle(s){ return s.replace(/^(the|a|an)\s+/, ''); }
 function invKey(name, batch){ return stripLeadingArticle(normKey(name)) + "::" + norm(batch); }
@@ -331,8 +348,13 @@ function parseStationSheet(csvText){
     var batchNum = col(row, map, "batch", 1);
     var emp1 = stripPlaceholderCrew(col(row, map, "employee_1", 3));
     var emp2 = stripPlaceholderCrew(col(row, map, "employee_2", 4));
+    var employeeNames = splitCompoundNames(emp1).concat(splitCompoundNames(emp2));
+    // Dedupe in case the same person ends up listed twice (e.g. a compound
+    // cell in Employee 1 plus their own name repeated in Employee 2).
+    var seenNames = {};
+    employeeNames = employeeNames.filter(function(n){ var k = lower(n); if(seenNames[k]) return false; seenNames[k]=true; return true; });
     var startTimeRaw = col(row, map, "start_time", 6);
-    meals.push({ mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned", employees: [emp1, emp2].filter(Boolean), startTimeRaw: startTimeRaw });
+    meals.push({ mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned", employees: employeeNames, startTimeRaw: startTimeRaw });
   }
   return { meals: meals, stations: stations, headerFound:true };
 }
@@ -493,7 +515,16 @@ function buildMealStats(){
     var avgUnits = sumUnits / b.runs.length;
     return { name: b.name, runs: b.runs.length, avgMinutes: avgMin, avgUnits: avgUnits, minPerUnit: avgUnits > 0 ? avgMin/avgUnits : null };
   });
-  out.sort(function(a,b){ return b.avgMinutes - a.avgMinutes; });
+  // Sort by per-plate time, not raw batch duration — a meal made in big
+  // batches will always show a large avgMinutes even if it's fast per
+  // plate, so ranking on avgMinutes here would mislabel it "slowest" when
+  // it isn't. Consumers of this list (the meal table, the voice briefing)
+  // both mean "slowest to actually make," which is the per-plate figure.
+  out.sort(function(a,b){
+    var av = a.minPerUnit == null ? -Infinity : a.minPerUnit;
+    var bv = b.minPerUnit == null ? -Infinity : b.minPerUnit;
+    return bv - av;
+  });
   return out;
 }
 
@@ -507,6 +538,15 @@ function buildMealStats(){
    from many different partners is closer to a real individual read
    than one built from a single always-same partner.
 ============================================================ */
+// Collapses spelling/spacing/punctuation/case variants of the same person
+// into one key ("Reyna F", "Reyna F.", "reyna f", "Reyna  F") so they don't
+// fragment into separate leaderboard entries. The DISPLAY name shown is
+// whichever raw spelling appeared most often, not the normalized key
+// itself, so the table still reads with real capitalization.
+function normalizeEmployeeKey(name){
+  return lower(name).replace(/\.+$/,'').replace(/\s+/g,' ').trim();
+}
+
 function buildEmployeeStats(mealStats){
   var mealAvgByKey = {};
   mealStats.forEach(function(m){ mealAvgByKey[normKey(m.name)] = m.minPerUnit; });
@@ -521,22 +561,26 @@ function buildEmployeeStats(mealStats){
     if(speedIndex == null || !isFinite(speedIndex)) return;
     (r.employees || []).forEach(function(name){
       if(!name) return;
-      var e = (byEmp[name] = byEmp[name] || { name: name, indices: [], partners: {}, mealBreakdown: {} });
+      var key = normalizeEmployeeKey(name);
+      var e = (byEmp[key] = byEmp[key] || { key: key, nameCounts: {}, indices: [], partners: {}, mealBreakdown: {} });
+      e.nameCounts[name] = (e.nameCounts[name] || 0) + 1;
       e.indices.push(speedIndex);
-      (r.employees || []).forEach(function(p){ if(p && p !== name) e.partners[p] = true; });
-      var mb = (e.mealBreakdown[r.mealName] = e.mealBreakdown[r.mealName] || { runs: 0, sumMinutes: 0, sumUnits: 0 });
+      (r.employees || []).forEach(function(p){ if(p && normalizeEmployeeKey(p) !== key) e.partners[normalizeEmployeeKey(p)] = p; });
+      var mb = (e.mealBreakdown[r.mealName] = e.mealBreakdown[r.mealName] || { runs: 0, sumMinutes: 0, sumUnits: 0, detail: [] });
       mb.runs++; mb.sumMinutes += r.totalMinutes; mb.sumUnits += r.units;
+      mb.detail.push({ units: r.units, totalMinutes: r.totalMinutes, minPerUnit: thisMinPerUnit, day: r.day });
     });
   });
 
-  var list = Object.keys(byEmp).map(function(name){
-    var e = byEmp[name];
+  var list = Object.keys(byEmp).map(function(key){
+    var e = byEmp[key];
+    var displayName = Object.keys(e.nameCounts).sort(function(a,b){ return e.nameCounts[b]-e.nameCounts[a]; })[0];
     var avgIdx = e.indices.reduce(function(a,b){return a+b;},0) / e.indices.length;
-    // Per-meal breakdown: this person's own real average time on each meal
-    // they've actually worked, next to that meal's overall average across
-    // everyone — so a claim like "Mari's finish time on Meal X is better
-    // than average" can be checked against actual minutes, not just the
-    // single blended ratio score.
+    // Per-meal breakdown, quantity by quantity: this person's actual
+    // individual batches on each meal they've worked — same meal, real
+    // batch size, real total minutes — sorted by batch size so runs of
+    // similar quantity land next to each other for a fair side-by-side
+    // read, not one blended average that hides batch-size differences.
     var breakdown = Object.keys(e.mealBreakdown).map(function(mealName){
       var mb = e.mealBreakdown[mealName];
       var overall = mealAvgByKey[normKey(mealName)];
@@ -545,11 +589,12 @@ function buildEmployeeStats(mealStats){
         mealName: mealName,
         runs: mb.runs,
         avgMinutes: mb.sumMinutes / mb.runs,
-        vsOverall: (overall && personalMinPerUnit) ? overall / personalMinPerUnit : null // >1 = faster than the field average on this meal
+        vsOverall: (overall && personalMinPerUnit) ? overall / personalMinPerUnit : null, // >1 = faster than the field average on this meal
+        detail: mb.detail.slice().sort(function(a,b){ return a.units - b.units; })
       };
     }).sort(function(a,b){ return b.runs - a.runs; });
     return {
-      name: name,
+      name: displayName,
       runs: e.indices.length,
       score: avgIdx,
       partnerCount: Object.keys(e.partners).length,
@@ -563,25 +608,83 @@ function buildEmployeeStats(mealStats){
 }
 
 /* ============================================================
+   PAIR / TEAM STATS — the honest complement to the individual
+   leaderboard above. Individual scores blend a person's performance
+   across however many different partners they've had; this groups by
+   the ACTUAL recorded team on each batch (exactly who Employee 1 + 2
+   were, together) so "this couple, together, on these meals" is its
+   own comparison, not mixed into anyone's solo number.
+============================================================ */
+function buildPairStats(mealStats){
+  var mealAvgByKey = {};
+  mealStats.forEach(function(m){ mealAvgByKey[normKey(m.name)] = m.minPerUnit; });
+
+  var byTeam = {};
+  state.runs.forEach(function(r){
+    if(!r.units || !r.employees || r.employees.length < 2) return; // solo-credited runs aren't a "pair"
+    var thisMinPerUnit = r.totalMinutes / r.units;
+    var mealAvg = mealAvgByKey[normKey(r.mealName)];
+    if(!mealAvg) return;
+    var speedIndex = thisMinPerUnit > 0 ? mealAvg / thisMinPerUnit : null;
+    if(speedIndex == null || !isFinite(speedIndex)) return;
+    var teamKey = r.employees.map(normalizeEmployeeKey).sort().join(" & ");
+    var teamDisplay = r.employees.slice().sort().join(" & ");
+    var t = (byTeam[teamKey] = byTeam[teamKey] || { display: teamDisplay, indices: [], meals: {} });
+    t.indices.push(speedIndex);
+    t.meals[r.mealName] = true;
+  });
+
+  var list = Object.keys(byTeam).map(function(teamKey){
+    var t = byTeam[teamKey];
+    var avgIdx = t.indices.reduce(function(a,b){return a+b;},0) / t.indices.length;
+    return {
+      name: t.display,
+      runs: t.indices.length,
+      score: avgIdx,
+      mealCount: Object.keys(t.meals).length,
+      enoughData: t.indices.length >= config.minRunsForRanking
+    };
+  });
+  list.sort(function(a,b){ return b.score - a.score; });
+  return list;
+}
+
+/* ============================================================
    RENDER
 ============================================================ */
 function renderAll(daysScanned){
   var mealStats = buildMealStats();
   var empStats = buildEmployeeStats(mealStats);
+  var pairStats = buildPairStats(mealStats);
   renderMealTable(mealStats);
   renderEmployeeList(empStats);
+  renderPairList(pairStats);
   renderDeptStats();
   document.getElementById("lookbackDaysLabel").textContent = daysScanned;
   document.getElementById("attributionCaveat").textContent =
-    "Every batch on the Station sheet credits TWO people (Employee 1 + Employee 2), never one person alone — there is no field that separates who did what within a pair. Scores below are each person's average speed across every batch they touched, whoever they worked with. \"Worked with N people\" is a trust signal: a score built from many different partners is a more honest individual read than one built from a single always-same partner. Two people who only ever work together will always show identical scores — that's a real limit of the source data, not a bug here.";
-  state.lastMealStats = mealStats; state.lastEmpStats = empStats;
+    "Every batch on the Station sheet credits TWO people (Employee 1 + Employee 2), never one person alone — there is no field that separates who did what within a pair. Scores below are each person's average speed across every batch they touched, whoever they worked with, blended across all their partners — tap a name for the actual meal-by-meal, batch-by-batch numbers behind that score. \"Worked with N people\" is a trust signal: a score built from many different partners is a more honest individual read than one built from a single always-same partner. Two people who only ever work together will always show identical individual scores — that's a real limit of the source data. The Team Pairings table below is the direct answer to that: it scores the ACTUAL recorded pair together, not blended into anyone's solo number.";
+  state.lastMealStats = mealStats; state.lastEmpStats = empStats; state.lastPairStats = pairStats;
 }
 
 function renderMealTable(mealStats){
   if(!mealStats.length){ document.getElementById("mealTableWrap").innerHTML = '<div class="loading">No matched runs in the lookback window yet.</div>'; return; }
-  var html = '<table><thead><tr><th>Meal</th><th class="num">Avg Time</th><th class="num">Avg Units</th><th class="num">Runs</th></tr></thead><tbody>';
-  mealStats.forEach(function(m){
-    html += '<tr><td>'+escapeHtml(m.name)+'</td><td class="num">'+fmtMinutes(m.avgMinutes)+'</td><td class="num">'+Math.round(m.avgUnits)+'</td><td class="num">'+m.runs+'</td></tr>';
+  // "Avg Batch Time" is total start-to-packaged duration — useful for
+  // planning how long a batch of that meal ties up a station, but two
+  // meals can show similar batch times purely because one runs bigger
+  // batches, not because they're equally fast to make. "Time / Plate" is
+  // the actual speed comparison: batch time divided by batch size. Sorted
+  // by that per-plate figure (slowest per plate first), not raw batch
+  // duration, so "slowest on this list" means genuinely slow to make, not
+  // just produced in large batches.
+  var rows = mealStats.slice().sort(function(a,b){
+    var av = a.minPerUnit == null ? -Infinity : a.minPerUnit;
+    var bv = b.minPerUnit == null ? -Infinity : b.minPerUnit;
+    return bv - av;
+  });
+  var html = '<table><thead><tr><th>Meal</th><th class="num">Time / Plate</th><th class="num">Avg Batch Time</th><th class="num">Avg Batch Size</th><th class="num">Runs</th></tr></thead><tbody>';
+  rows.forEach(function(m){
+    var perPlate = m.minPerUnit != null ? (m.minPerUnit >= 1 ? m.minPerUnit.toFixed(1)+" min" : Math.round(m.minPerUnit*60)+" sec") : "—";
+    html += '<tr><td>'+escapeHtml(m.name)+'</td><td class="num">'+perPlate+'</td><td class="num">'+fmtMinutes(m.avgMinutes)+'</td><td class="num">'+Math.round(m.avgUnits)+'</td><td class="num">'+m.runs+'</td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById("mealTableWrap").innerHTML = html;
@@ -601,7 +704,7 @@ function renderEmployeeList(empStats){
         + '<div class="empName">'+escapeHtml(e.name)+(e.enoughData ? '' : '<span class="badge-low">not enough data yet</span>')+' <span style="color:var(--text-faint);font-weight:400;font-size:11px;">— tap for per-meal breakdown</span></div>'
         + '<div class="empMeta">'+e.runs+' batches · '+e.mealCount+' meal types · worked with '+e.partnerCount+' other'+(e.partnerCount===1?'':'s')+'</div>'
         + '<div class="trackWrap"><div class="trackFill" style="width:'+pct+'%;"></div></div>'
-        + '<div class="breakdownPanel hidden" id="'+rowId+'">' + renderBreakdownTable(e.breakdown) + '</div>'
+        + '<div class="breakdownPanel hidden" id="'+rowId+'" onclick="event.stopPropagation()">' + renderBreakdownTable(e.breakdown, rowId) + '</div>'
       + '</div>'
       + '<div class="empScore">'+e.score.toFixed(2)+'×</div>'
       + '</div>';
@@ -610,6 +713,13 @@ function renderEmployeeList(empStats){
   document.querySelectorAll(".empRow").forEach(function(row){
     row.addEventListener("click", function(){
       var id = row.getAttribute("data-emp");
+      document.getElementById(id).classList.toggle("hidden");
+    });
+  });
+  document.querySelectorAll("#empList .mealBreakdownRow").forEach(function(row){
+    row.addEventListener("click", function(e){
+      e.stopPropagation();
+      var id = row.getAttribute("data-meal");
       document.getElementById(id).classList.toggle("hidden");
     });
   });
@@ -624,16 +734,49 @@ function renderEmployeeList(empStats){
 // Per-employee, per-meal actual average time — this is the "compared all
 // across, whoever they were paired with" view: for each meal this person
 // has worked, their own real average minutes next to how that compares to
-// the field average on that same meal (>1x = faster than the field).
-function renderBreakdownTable(breakdown){
+// the field average on that same meal (>1x = faster than the field). Each
+// meal row expands into the individual batches behind that average, sorted
+// by batch size — the "meal by meal, quantity by quantity" view: same
+// meal, comparable batch sizes sitting next to each other, real minutes,
+// not a blended number hiding how big each batch actually was.
+function renderBreakdownTable(breakdown, ownerId){
   if(!breakdown.length) return '<div style="font-size:12px;color:var(--text-faint);padding:8px 0;">No matched batches yet.</div>';
   var html = '<table style="margin-top:8px;"><thead><tr><th>Meal</th><th class="num">Their Avg</th><th class="num">vs Field</th><th class="num">Batches</th></tr></thead><tbody>';
-  breakdown.forEach(function(b){
+  breakdown.forEach(function(b, bi){
     var vs = b.vsOverall ? b.vsOverall.toFixed(2)+'×' : '—';
-    html += '<tr><td>'+escapeHtml(b.mealName)+'</td><td class="num">'+fmtMinutes(b.avgMinutes)+'</td><td class="num">'+vs+'</td><td class="num">'+b.runs+'</td></tr>';
+    var mealRowId = ownerId + "_meal_" + bi;
+    html += '<tr class="mealBreakdownRow" data-meal="'+mealRowId+'" style="cursor:pointer;"><td>'+escapeHtml(b.mealName)+' <span style="color:var(--text-faint);font-size:10px;">▾</span></td><td class="num">'+fmtMinutes(b.avgMinutes)+'</td><td class="num">'+vs+'</td><td class="num">'+b.runs+'</td></tr>';
+    html += '<tr class="hidden" id="'+mealRowId+'"><td colspan="4" style="padding:0 0 10px 12px;">' + renderRunDetailTable(b.detail) + '</td></tr>';
   });
   html += '</tbody></table>';
   return html;
+}
+
+// The actual quantity-by-quantity rows: one line per real batch — its
+// size, its total time, and the resulting per-plate time — for exactly
+// one meal, so two batches of similar size can be eyeballed side by side.
+function renderRunDetailTable(detail){
+  if(!detail.length) return '';
+  var html = '<table style="font-size:11px;"><thead><tr><th>Batch Size</th><th class="num">Total Time</th><th class="num">Time/Plate</th><th class="num">Date</th></tr></thead><tbody>';
+  detail.forEach(function(d){
+    var perPlate = d.minPerUnit >= 1 ? d.minPerUnit.toFixed(1)+" min" : Math.round(d.minPerUnit*60)+" sec";
+    var dateStr = d.day ? (d.day.getMonth()+1)+"/"+d.day.getDate() : "—";
+    html += '<tr><td>'+d.units+'</td><td class="num">'+fmtMinutes(d.totalMinutes)+'</td><td class="num">'+perPlate+'</td><td class="num">'+dateStr+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderPairList(pairStats){
+  var wrap = document.getElementById("pairTableWrap");
+  if(!wrap) return;
+  if(!pairStats.length){ wrap.innerHTML = '<div class="loading">No matched two-person batches yet.</div>'; return; }
+  var html = '<table><thead><tr><th>Team</th><th class="num">Score</th><th class="num">Meals</th><th class="num">Batches</th></tr></thead><tbody>';
+  pairStats.forEach(function(t){
+    html += '<tr><td>'+escapeHtml(t.name)+(t.enoughData?'':' <span class="badge-low">low data</span>')+'</td><td class="num">'+t.score.toFixed(2)+'×</td><td class="num">'+t.mealCount+'</td><td class="num">'+t.runs+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
 }
 
 function renderDeptStats(){
@@ -694,13 +837,51 @@ function buildBriefingText(){
   }
   return parts.join(" ");
 }
+// Voices don't load synchronously in every browser — Chrome in particular
+// only populates getVoices() after a voiceschanged event fires (sometimes
+// after a short delay, sometimes not at all until the first speak() call).
+// Cache the pick once resolved so we're not re-scoring the voice list on
+// every briefing tap.
+var cachedVoice = null;
+function pickBestVoice(){
+  if(cachedVoice) return cachedVoice;
+  if(!("speechSynthesis" in window)) return null;
+  var voices = window.speechSynthesis.getVoices();
+  if(!voices.length) return null;
+  // Ranked by how natural real device voices tend to sound, best first.
+  // Local (non-network) neural voices are preferred over remote ones
+  // purely for reliability — a remote voice can silently fail on a spotty
+  // kitchen wifi connection, a local one always plays.
+  var preferredNames = [
+    /Google US English/i, /Samantha/i, /Ava \(Premium\)/i, /Ava/i, /Zoe/i,
+    /Natural/i, /Enhanced/i, /Premium/i, /Neural/i, /Aria/i, /Jenny/i
+  ];
+  for(var p=0;p<preferredNames.length;p++){
+    var hit = voices.filter(function(v){ return preferredNames[p].test(v.name) && /en/i.test(v.lang); })[0];
+    if(hit){ cachedVoice = hit; return hit; }
+  }
+  // Fall back to any local (not "Remote") English voice over the browser's
+  // bare default, which is usually the flattest-sounding option installed.
+  var localEnglish = voices.filter(function(v){ return /en/i.test(v.lang) && !/remote/i.test(v.name); })[0];
+  cachedVoice = localEnglish || voices[0] || null;
+  return cachedVoice;
+}
+if("speechSynthesis" in window){
+  window.speechSynthesis.onvoiceschanged = function(){ cachedVoice = null; pickBestVoice(); };
+}
+
 document.getElementById("briefingBtn").addEventListener("click", function(){
   var text = buildBriefingText();
   document.getElementById("briefingText").textContent = text;
   if(!("speechSynthesis" in window)){ return; }
   window.speechSynthesis.cancel();
   var u = new SpeechSynthesisUtterance(text);
-  u.rate = 1.0;
+  var voice = pickBestVoice();
+  if(voice) u.voice = voice;
+  // Slightly slower than default and a touch of pitch variation reads as
+  // more natural than a flat 1.0/1.0 — small adjustment, real difference.
+  u.rate = 0.95;
+  u.pitch = 1.02;
   window.speechSynthesis.speak(u);
 });
 
