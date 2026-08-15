@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hummus Fit — Manager Performance Analytics</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --card:#ffffff; --border:#e3e5ea; --text:#111827;
+    --text-dim:#6b7280; --text-faint:#9aa1ad;
+    --blue:#3b62f6; --blue-dark:#2947c9; --blue-tint:#eaefff;
+    --green:#16a34a; --green-tint:#e7f7ed;
+    --amber:#b8860b; --amber-tint:#fdf3d9;
+    --gray-tint:#eef0f3; --red:#dc2626; --red-tint:#fde8e8;
+    --gold:#c9971f; --silver:#9aa1ad; --bronze:#b0703a;
+    --radius:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-tap-highlight-color:transparent;
+  }
+  button{ font-family:inherit; cursor:pointer; border:none; touch-action:manipulation; }
+  input{ font-family:inherit; }
+
+  /* ===== PIN gate ===== */
+  #pinGate{
+    position:fixed; inset:0; background:#0c1220; z-index:999;
+    display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px;
+    color:#fff; padding:24px; text-align:center;
+  }
+  #pinGate h1{ font-size:20px; margin:0 0 4px; }
+  #pinGate p{ font-size:13px; color:#9aa1ad; margin:0; max-width:360px; line-height:1.5; }
+  #pinInput{
+    font-size:28px; letter-spacing:10px; text-align:center; width:220px;
+    padding:14px 10px; border-radius:12px; border:1px solid #333; background:#161d2e; color:#fff;
+  }
+  #pinSubmit{
+    font-size:16px; font-weight:700; padding:14px 32px; border-radius:12px;
+    background:var(--blue); color:#fff;
+  }
+  #pinError{ color:#f87171; font-size:13px; min-height:16px; }
+  .hidden{ display:none !important; }
+
+  /* ===== Layout ===== */
+  header{
+    background:var(--card); padding:18px 22px; border-bottom:1px solid var(--border);
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  }
+  header h1{ font-size:19px; margin:0; }
+  header .sub{ font-size:12px; color:var(--text-faint); margin-top:2px; }
+  .headerBtns{ display:flex; gap:10px; align-items:center; }
+  .pillBtn{
+    background:var(--blue-tint); color:var(--blue-dark); font-size:13px; font-weight:700;
+    padding:10px 16px; border-radius:999px; display:flex; align-items:center; gap:6px;
+  }
+  .pillBtn.dark{ background:#111827; color:#fff; }
+  #refreshStatus{ font-size:11px; color:var(--text-faint); }
+
+  main{ padding:18px; max-width:900px; margin:0 auto; }
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:18px; margin-bottom:16px;
+  }
+  .card h2{ font-size:16px; margin:0 0 4px; }
+  .card .cardSub{ font-size:12px; color:var(--text-faint); margin:0 0 14px; line-height:1.5; }
+  .caveat{
+    font-size:12px; color:var(--amber); background:var(--amber-tint); border-radius:10px;
+    padding:10px 12px; margin-bottom:12px; line-height:1.5;
+  }
+
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ text-align:left; padding:9px 8px; border-bottom:1px solid var(--border); }
+  th{ color:var(--text-faint); font-weight:700; font-size:11px; text-transform:uppercase; }
+  td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+  th.num{ text-align:right; }
+
+  .empRow{ display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .empRow:last-child{ border-bottom:none; }
+  .rank{ width:26px; font-weight:800; color:var(--text-faint); font-size:14px; text-align:center; }
+  .rank.gold{ color:var(--gold); } .rank.silver{ color:var(--silver); } .rank.bronze{ color:var(--bronze); }
+  .empMain{ flex:1; min-width:0; }
+  .empName{ font-weight:700; font-size:15px; }
+  .empMeta{ font-size:11px; color:var(--text-faint); margin-top:2px; }
+  .trackWrap{ background:var(--gray-tint); border-radius:8px; height:10px; margin-top:8px; overflow:hidden; }
+  .trackFill{ height:100%; border-radius:8px; background:var(--blue); transition:width 1.2s ease; width:0%; }
+  .empScore{ width:64px; text-align:right; font-weight:800; font-size:15px; }
+  .lowData{ opacity:0.55; }
+  .breakdownPanel{ margin-top:2px; }
+  .breakdownPanel table{ font-size:12px; }
+  .breakdownPanel th,.breakdownPanel td{ padding:6px 4px; }
+  .badge-low{ font-size:10px; background:var(--gray-tint); color:var(--text-dim); padding:2px 7px; border-radius:6px; margin-left:6px; }
+
+  .statGrid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:8px; }
+  .statBox{ background:var(--gray-tint); border-radius:12px; padding:14px; }
+  .statBox .v{ font-size:22px; font-weight:800; }
+  .statBox .l{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+
+  .calcRow{ display:flex; gap:10px; align-items:center; margin-top:10px; }
+  .calcRow input{ flex:1; font-size:16px; padding:12px; border-radius:10px; border:1px solid var(--border); }
+  .calcRow button{ background:var(--blue); color:#fff; font-weight:700; font-size:14px; padding:12px 18px; border-radius:10px; }
+  #calcResult{ font-size:14px; margin-top:10px; color:var(--text-dim); }
+
+  #briefingBtn{
+    width:100%; background:#111827; color:#fff; font-size:15px; font-weight:700;
+    padding:16px; border-radius:14px; display:flex; align-items:center; justify-content:center; gap:10px;
+  }
+  #briefingText{
+    font-size:13px; line-height:1.6; color:var(--text-dim); margin-top:12px;
+    background:var(--gray-tint); border-radius:10px; padding:12px; white-space:pre-wrap;
+  }
+  .loading{ font-size:13px; color:var(--text-faint); padding:20px; text-align:center; }
+</style>
+</head>
+<body>
+
+<div id="pinGate">
+  <h1>Manager Analytics</h1>
+  <p>This page is unlisted, not linked from the production hub, and not protected by real login — anyone with this exact URL and the PIN can view it. Treat the link like a password.</p>
+  <input id="pinInput" type="password" inputmode="numeric" maxlength="6" placeholder="••••">
+  <button id="pinSubmit">Unlock</button>
+  <div id="pinError"></div>
+</div>
+
+<div id="appRoot" class="hidden">
+  <header>
+    <div>
+      <h1>Manager Performance Analytics</h1>
+      <div class="sub">Hummus Fit Production — read-only, never writes to any sheet</div>
+    </div>
+    <div class="headerBtns">
+      <div id="refreshStatus">Loading…</div>
+      <button class="pillBtn" id="btnRefresh">↻ Refresh</button>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="card">
+      <button id="briefingBtn">🔊 Play Live Performance Briefing</button>
+      <div class="cardSub" style="margin-top:10px;">
+        Reads a spoken summary using your browser's built-in voice (no external AI service is called — this app has no backend). Tap once; browsers block audio from playing without a tap.
+      </div>
+      <div id="briefingText"></div>
+    </div>
+
+    <div class="card">
+      <h2>Department Capacity</h2>
+      <p class="cardSub">Average real production rate across the lookback window, from Station + Inventory sheet history.</p>
+      <div class="statGrid" id="deptStatGrid"><div class="loading">Loading…</div></div>
+      <div class="calcRow">
+        <input id="calcUnits" type="number" placeholder="e.g. 500 meals">
+        <button id="calcBtn">Estimate hours</button>
+      </div>
+      <div id="calcResult"></div>
+    </div>
+
+    <div class="card">
+      <h2>Employee Performance — Race</h2>
+      <p class="cardSub">Ranked most-efficient to slowest, past <span id="lookbackDaysLabel">15</span> days.</p>
+      <div class="caveat" id="attributionCaveat"></div>
+      <div id="empList"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Per-Meal Average Time</h2>
+      <p class="cardSub">Live-recomputed from real Start Time → Inventory "Added to Shopify" timestamps.</p>
+      <div id="mealTableWrap"><div class="loading">Loading…</div></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ============================================================
+   ACCESS — this is an obscurity gate, not real security. There is no
+   backend and no user accounts available under this project's plain-
+   HTML/no-backend constraint, so this PIN cannot verify WHO is asking,
+   only that they know a 4-digit code baked into this file's source.
+   Anyone who can view this file's source (or guess the PIN) can get in.
+   Change MANAGER_PIN below and reship the file to rotate it. Do not
+   treat this as equivalent to a real login.
+============================================================ */
+var MANAGER_PIN = "0124";
+
+document.getElementById("pinSubmit").addEventListener("click", tryPin);
+document.getElementById("pinInput").addEventListener("keydown", function(e){ if(e.key === "Enter") tryPin(); });
+function tryPin(){
+  var val = document.getElementById("pinInput").value;
+  if(val === MANAGER_PIN){
+    document.getElementById("pinGate").classList.add("hidden");
+    document.getElementById("appRoot").classList.remove("hidden");
+    boot();
+  } else {
+    document.getElementById("pinError").textContent = "Wrong PIN.";
+    document.getElementById("pinInput").value = "";
+  }
+}
+
+/* ============================================================
+   CONFIG — same sheets the production hub reads, read-only.
+============================================================ */
+var config = {
+  stationSheetId: "1RPMZIlTlZtSXQYDb-cjGUbSeeamiHcYNCaV6DglGiJM",
+  inventorySheetId: "1VSNtHtIN87bMrQlfFUPvaSQqGQWE9g6hAu0EgXAGVsU",
+  sheetsApiKey: "AIzaSyAHBIKo3oCzeNzQu19UoNM2KfByy2OUMRs",
+  lookbackDays: 15,
+  minRunsForRanking: 3 // employees below this many matched runs show as "not enough data" instead of a false rank
+};
+
+var state = { runs: [], byDay: [], deptRate: null, loadedAt: null };
+
+/* ============================================================
+   PARSING — copied verbatim from index.html so this page's numbers
+   never drift from what the production hub itself computes. If you
+   change the parsing logic in index.html, mirror the change here too.
+============================================================ */
+function parseCSV(text){
+  var rows = []; var row = []; var field = ""; var inQuotes = false;
+  for(var i=0;i<text.length;i++){
+    var c = text[i];
+    if(inQuotes){
+      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else { inQuotes = false; } }
+      else { field += c; }
+    } else {
+      if(c === '"'){ inQuotes = true; }
+      else if(c === ','){ row.push(field); field=""; }
+      else if(c === '\r'){ /* skip */ }
+      else if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=""; }
+      else { field += c; }
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+function norm(s){ return (s||"").toString().trim(); }
+function lower(s){ return norm(s).toLowerCase(); }
+function stripPlaceholderCrew(s){ return /^x$/i.test(norm(s)) ? "" : norm(s); }
+function normKey(s){ return (s||"").toString().toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function stripLeadingArticle(s){ return s.replace(/^(the|a|an)\s+/, ''); }
+function invKey(name, batch){ return stripLeadingArticle(normKey(name)) + "::" + norm(batch); }
+
+function parseTimeOnDate(str, baseDate){
+  var s = norm(str);
+  if(!s) return null;
+  var m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if(!m) return null;
+  var hh = parseInt(m[1],10), mm = parseInt(m[2],10), ss = m[3] ? parseInt(m[3],10) : 0;
+  var ap = m[4].toUpperCase();
+  if(ap === "PM" && hh !== 12) hh += 12;
+  if(ap === "AM" && hh === 12) hh = 0;
+  var d = new Date(baseDate.getTime());
+  d.setHours(hh, mm, ss, 0);
+  return d;
+}
+var MONTH_ABBR_LOOKUP = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+function parseShopifyTimestamp(str, yearHint){
+  var s = norm(str);
+  if(!s) return null;
+  var m = s.match(/([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if(!m) return null;
+  var monIdx = MONTH_ABBR_LOOKUP[m[1].slice(0,3).toLowerCase()];
+  if(monIdx == null) return null;
+  var day = parseInt(m[2],10), hh = parseInt(m[3],10), mm = parseInt(m[4],10);
+  var ap = m[5].toUpperCase();
+  if(ap === "PM" && hh !== 12) hh += 12;
+  if(ap === "AM" && hh === 12) hh = 0;
+  var d = new Date(yearHint, monIdx, day, hh, mm, 0, 0);
+  return isNaN(d.getTime()) ? null : d;
+}
+function findHeaderIndex(rows, mustHaveCol){
+  for(var i=0;i<rows.length;i++){
+    for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]) === mustHaveCol){ return i; } }
+  }
+  return -1;
+}
+function findHeaderIndexStartsWith(rows, prefix){
+  for(var i=0;i<rows.length;i++){
+    for(var j=0;j<rows[i].length;j++){ if(lower(rows[i][j]).indexOf(prefix) !== -1){ return i; } }
+  }
+  return -1;
+}
+function buildColMap(headerRow){
+  var map = {};
+  headerRow.forEach(function(h,idx){
+    var key = lower(h).replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"");
+    if(key) map[key] = idx;
+  });
+  return map;
+}
+function col(row, map, key, fallbackIdx){
+  var idx = map[key];
+  if(idx === undefined) idx = fallbackIdx;
+  if(idx === undefined || idx < 0) return "";
+  return norm(row[idx]);
+}
+function parseStationSheet(csvText){
+  var rows = parseCSV(csvText);
+  var meals = []; var stations = {};
+  var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
+  if(headerIdx === -1) return { meals: meals, stations: stations, headerFound:false, rowCount: rows.length };
+  var sumHeaderIdx = findHeaderIndex(rows.slice(0, headerIdx), "station");
+  if(sumHeaderIdx > -1){
+    var sMap = buildColMap(rows[sumHeaderIdx]);
+    for(var i=sumHeaderIdx+1;i<headerIdx;i++){
+      var r = rows[i];
+      var stCell = col(r, sMap, "station", 0);
+      var m = stCell.match(/station\s*(\d+)/i);
+      if(!m) { if(!stCell) continue; else break; }
+      var num = m[1];
+      stations[num] = { employee1: stripPlaceholderCrew(col(r, sMap, "employee_1")), employee2: stripPlaceholderCrew(col(r, sMap, "employee_2")), notes: col(r, sMap, "notes") };
+    }
+  }
+  var map = buildColMap(rows[headerIdx]);
+  var currentStationFromSeparator = ""; var orderCounter = 0;
+  for(var i2=headerIdx+1;i2<rows.length;i2++){
+    var row = rows[i2]; var first = norm(row[0]);
+    if(!first) continue;
+    if(/^summary/i.test(first)) break;
+    if(/^station\s*\d+/i.test(first) || /^meals pack/i.test(first)){
+      var sm = first.match(/station\s*(\d+)/i);
+      currentStationFromSeparator = sm ? sm[1] : currentStationFromSeparator;
+      continue;
+    }
+    if(/^\(.*\)$/.test(first)) continue;
+    var mealName = first;
+    var stationAssigned = col(row, map, "station_assigned", 2) || currentStationFromSeparator;
+    var batchNum = col(row, map, "batch", 1);
+    var emp1 = stripPlaceholderCrew(col(row, map, "employee_1", 3));
+    var emp2 = stripPlaceholderCrew(col(row, map, "employee_2", 4));
+    var startTimeRaw = col(row, map, "start_time", 6);
+    meals.push({ mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned", employees: [emp1, emp2].filter(Boolean), startTimeRaw: startTimeRaw });
+  }
+  return { meals: meals, stations: stations, headerFound:true };
+}
+function parseInventorySheet(csvText){
+  var rows = parseCSV(csvText);
+  var headerIdx = findHeaderIndexStartsWith(rows, "meal name");
+  if(headerIdx === -1){ var empty = []; empty.headerFound = false; return empty; }
+  var map = buildColMap(rows[headerIdx]);
+  var out = [];
+  for(var i=headerIdx+1;i<rows.length;i++){
+    var row = rows[i]; var name = norm(row[0]);
+    if(!name) continue;
+    if(/^total meals packed/i.test(name)) break;
+    out.push({ mealName: name, batchNum: col(row, map, "batch", 1), machineCrewUnits: col(row, map, "machine_crew_units", 4), addedToShopify: col(row, map, "added_to_shopify", 6) });
+  }
+  out.headerFound = true;
+  return out;
+}
+
+var WEEKDAY_ABBR = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+var MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function stationTabName(d){ return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
+function pad2(n){ return n < 10 ? "0"+n : ""+n; }
+function inventoryTabRegex(d){
+  var weekdayMonth = WEEKDAY_ABBR[d.getDay()] + " " + MONTH_ABBR[d.getMonth()];
+  return new RegExp("^" + weekdayMonth + "\\s+0?" + d.getDate() + "(?:\\D|$)");
+}
+function parseStationDateFromTabName(title){
+  var m = norm(title).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return null;
+  var d = new Date(parseInt(m[1],10), parseInt(m[2],10)-1, parseInt(m[3],10));
+  return isNaN(d.getTime()) ? null : d;
+}
+function fetchSheetTabs(sheetId, apiKey){
+  var url = "https://sheets.googleapis.com/v4/spreadsheets/" + sheetId + "?fields=sheets.properties(sheetId,title)&key=" + apiKey;
+  return fetch(url).then(function(r){
+    if(!r.ok) throw new Error("tab lookup failed (" + r.status + ")");
+    return r.json();
+  }).then(function(json){
+    return (json.sheets||[]).map(function(s){ return { title: norm(s.properties.title), gid: String(s.properties.sheetId) }; });
+  });
+}
+function findStationTab(tabs, d){ var name = stationTabName(d); return tabs.filter(function(t){ return t.title === name; })[0] || null; }
+function findInventoryTab(tabs, d){ var re = inventoryTabRegex(d); return tabs.filter(function(t){ return re.test(t.title); })[0] || null; }
+function csvUrl(sheetId, gid){ return "https://docs.google.com/spreadsheets/d/" + sheetId + "/export?format=csv&gid=" + gid; }
+
+/* ============================================================
+   FETCH ONE HISTORICAL DAY — same join logic as the production hub's
+   fetchHistoricalDayRuns, extended to also carry station + employees
+   per run (the production hub doesn't need identity, this page does).
+============================================================ */
+function fetchHistoricalDayRunsWithCrew(stationTab, inventoryTab, dayDate){
+  return Promise.all([
+    fetch(csvUrl(config.stationSheetId, stationTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("station fetch failed")); }),
+    fetch(csvUrl(config.inventorySheetId, inventoryTab.gid)).then(function(r){ return r.ok ? r.text() : Promise.reject(new Error("inventory fetch failed")); })
+  ]).then(function(results){
+    var stationParsed = parseStationSheet(results[0]);
+    var invRows = parseInventorySheet(results[1]);
+    var invByKey = {};
+    var dayTotalUnits = 0;
+    invRows.forEach(function(r){
+      var n = parseInt(r.machineCrewUnits, 10);
+      if(isNaN(n)) return;
+      dayTotalUnits += n;
+      invByKey[invKey(r.mealName, r.batchNum)] = { units: n, addedToShopifyRaw: r.addedToShopify };
+    });
+    var runs = []; var earliestStart = null, latestPackaged = null;
+    stationParsed.meals.forEach(function(fm){
+      var startTime = parseTimeOnDate(fm.startTimeRaw, dayDate);
+      if(!startTime) return;
+      var invHit = invByKey[invKey(fm.mealName, fm.batchNum)];
+      if(!invHit) return;
+      var packagedAt = parseShopifyTimestamp(invHit.addedToShopifyRaw, dayDate.getFullYear());
+      if(!packagedAt) return;
+      var totalMinutes = (packagedAt - startTime) / 60000;
+      if(totalMinutes <= 0 || totalMinutes > 20*60) return;
+      runs.push({ mealName: fm.mealName, station: fm.station, employees: fm.employees, units: invHit.units, totalMinutes: totalMinutes, day: dayDate });
+      if(!earliestStart || startTime < earliestStart) earliestStart = startTime;
+      if(!latestPackaged || packagedAt > latestPackaged) latestPackaged = packagedAt;
+    });
+    var shiftHours = null;
+    if(earliestStart && latestPackaged){
+      var span = (latestPackaged - earliestStart) / 3600000;
+      if(span > 0 && span <= 20) shiftHours = span;
+    }
+    return { runs: runs, shiftHours: shiftHours, dayTotalUnits: dayTotalUnits };
+  });
+}
+
+/* ============================================================
+   LOAD + AGGREGATE
+============================================================ */
+function loadAnalytics(){
+  setRefreshStatus("Loading…");
+  return fetchSheetTabs(config.stationSheetId, config.sheetsApiKey).then(function(stationTabs){
+    return fetchSheetTabs(config.inventorySheetId, config.sheetsApiKey).then(function(invTabs){
+      var todayReal = new Date(); todayReal.setHours(0,0,0,0);
+      var candidateDates = stationTabs
+        .map(function(t){ return parseStationDateFromTabName(t.title); })
+        .filter(function(d){ return d && d.getTime() !== todayReal.getTime(); })
+        .sort(function(a,b){ return b - a; })
+        .slice(0, config.lookbackDays);
+
+      var dayPromises = candidateDates.map(function(d){
+        var sHit = findStationTab(stationTabs, d);
+        var iHit = findInventoryTab(invTabs, d);
+        if(!sHit || !iHit) return Promise.resolve(null);
+        return fetchHistoricalDayRunsWithCrew(sHit, iHit, d).catch(function(){ return null; });
+      });
+
+      return Promise.all(dayPromises).then(function(perDay){
+        var goodDays = perDay.filter(Boolean);
+        var allRuns = [].concat.apply([], goodDays.map(function(p){ return p.runs; }));
+        state.runs = allRuns;
+        state.byDay = goodDays;
+        state.loadedAt = new Date();
+        computeDepartmentRate(goodDays);
+        renderAll(candidateDates.length);
+        setRefreshStatus("Updated " + state.loadedAt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) + " — " + candidateDates.length + " day(s), " + allRuns.length + " matched runs");
+      });
+    });
+  }).catch(function(err){
+    console.error(err);
+    setRefreshStatus("Load failed — check connection and API key");
+  });
+}
+function setRefreshStatus(t){ document.getElementById("refreshStatus").textContent = t; }
+
+function computeDepartmentRate(goodDays){
+  var hourSamples = [], rateSamples = [];
+  goodDays.forEach(function(d){
+    if(d.shiftHours && d.dayTotalUnits > 0){
+      hourSamples.push(d.shiftHours);
+      rateSamples.push(d.dayTotalUnits / d.shiftHours);
+    }
+  });
+  if(!rateSamples.length){ state.deptRate = null; return; }
+  var avgRate = rateSamples.reduce(function(a,b){return a+b;},0) / rateSamples.length;
+  var avgHours = hourSamples.reduce(function(a,b){return a+b;},0) / hourSamples.length;
+  var avgUnitsPerDay = avgRate * avgHours;
+  state.deptRate = { unitsPerHour: avgRate, avgShiftHours: avgHours, avgUnitsPerDay: avgUnitsPerDay, sampleDays: rateSamples.length };
+}
+
+/* ============================================================
+   PER-MEAL AVERAGES
+============================================================ */
+function buildMealStats(){
+  var byMeal = {};
+  state.runs.forEach(function(r){
+    var key = normKey(r.mealName);
+    (byMeal[key] = byMeal[key] || { name: r.mealName, runs: [] }).runs.push(r);
+  });
+  var out = Object.keys(byMeal).map(function(key){
+    var b = byMeal[key];
+    var sumMin = b.runs.reduce(function(s,r){ return s+r.totalMinutes; }, 0);
+    var sumUnits = b.runs.reduce(function(s,r){ return s+r.units; }, 0);
+    var avgMin = sumMin / b.runs.length;
+    var avgUnits = sumUnits / b.runs.length;
+    return { name: b.name, runs: b.runs.length, avgMinutes: avgMin, avgUnits: avgUnits, minPerUnit: avgUnits > 0 ? avgMin/avgUnits : null };
+  });
+  out.sort(function(a,b){ return b.avgMinutes - a.avgMinutes; });
+  return out;
+}
+
+/* ============================================================
+   EMPLOYEE PERFORMANCE — see the caveat rendered in the UI. Every run
+   credits BOTH Employee 1 and Employee 2 equally (that's the limit of
+   what the sheet records); an employee's score is their average speed
+   index across every batch they appear on, whoever they were paired
+   with. Partner diversity (how many different people they worked
+   with) is shown alongside the score as a trust signal — a score built
+   from many different partners is closer to a real individual read
+   than one built from a single always-same partner.
+============================================================ */
+function buildEmployeeStats(mealStats){
+  var mealAvgByKey = {};
+  mealStats.forEach(function(m){ mealAvgByKey[normKey(m.name)] = m.minPerUnit; });
+
+  var byEmp = {};
+  state.runs.forEach(function(r){
+    if(!r.units) return;
+    var thisMinPerUnit = r.totalMinutes / r.units;
+    var mealAvg = mealAvgByKey[normKey(r.mealName)];
+    if(!mealAvg) return;
+    var speedIndex = thisMinPerUnit > 0 ? mealAvg / thisMinPerUnit : null; // >1 = faster than meal average
+    if(speedIndex == null || !isFinite(speedIndex)) return;
+    (r.employees || []).forEach(function(name){
+      if(!name) return;
+      var e = (byEmp[name] = byEmp[name] || { name: name, indices: [], partners: {}, mealBreakdown: {} });
+      e.indices.push(speedIndex);
+      (r.employees || []).forEach(function(p){ if(p && p !== name) e.partners[p] = true; });
+      var mb = (e.mealBreakdown[r.mealName] = e.mealBreakdown[r.mealName] || { runs: 0, sumMinutes: 0, sumUnits: 0 });
+      mb.runs++; mb.sumMinutes += r.totalMinutes; mb.sumUnits += r.units;
+    });
+  });
+
+  var list = Object.keys(byEmp).map(function(name){
+    var e = byEmp[name];
+    var avgIdx = e.indices.reduce(function(a,b){return a+b;},0) / e.indices.length;
+    // Per-meal breakdown: this person's own real average time on each meal
+    // they've actually worked, next to that meal's overall average across
+    // everyone — so a claim like "Mari's finish time on Meal X is better
+    // than average" can be checked against actual minutes, not just the
+    // single blended ratio score.
+    var breakdown = Object.keys(e.mealBreakdown).map(function(mealName){
+      var mb = e.mealBreakdown[mealName];
+      var overall = mealAvgByKey[normKey(mealName)];
+      var personalMinPerUnit = mb.sumUnits > 0 ? mb.sumMinutes / mb.sumUnits : null;
+      return {
+        mealName: mealName,
+        runs: mb.runs,
+        avgMinutes: mb.sumMinutes / mb.runs,
+        vsOverall: (overall && personalMinPerUnit) ? overall / personalMinPerUnit : null // >1 = faster than the field average on this meal
+      };
+    }).sort(function(a,b){ return b.runs - a.runs; });
+    return {
+      name: name,
+      runs: e.indices.length,
+      score: avgIdx,
+      partnerCount: Object.keys(e.partners).length,
+      mealCount: breakdown.length,
+      enoughData: e.indices.length >= config.minRunsForRanking,
+      breakdown: breakdown
+    };
+  });
+  list.sort(function(a,b){ return b.score - a.score; });
+  return list;
+}
+
+/* ============================================================
+   RENDER
+============================================================ */
+function renderAll(daysScanned){
+  var mealStats = buildMealStats();
+  var empStats = buildEmployeeStats(mealStats);
+  renderMealTable(mealStats);
+  renderEmployeeList(empStats);
+  renderDeptStats();
+  document.getElementById("lookbackDaysLabel").textContent = daysScanned;
+  document.getElementById("attributionCaveat").textContent =
+    "Every batch on the Station sheet credits TWO people (Employee 1 + Employee 2), never one person alone — there is no field that separates who did what within a pair. Scores below are each person's average speed across every batch they touched, whoever they worked with. \"Worked with N people\" is a trust signal: a score built from many different partners is a more honest individual read than one built from a single always-same partner. Two people who only ever work together will always show identical scores — that's a real limit of the source data, not a bug here.";
+  state.lastMealStats = mealStats; state.lastEmpStats = empStats;
+}
+
+function renderMealTable(mealStats){
+  if(!mealStats.length){ document.getElementById("mealTableWrap").innerHTML = '<div class="loading">No matched runs in the lookback window yet.</div>'; return; }
+  var html = '<table><thead><tr><th>Meal</th><th class="num">Avg Time</th><th class="num">Avg Units</th><th class="num">Runs</th></tr></thead><tbody>';
+  mealStats.forEach(function(m){
+    html += '<tr><td>'+escapeHtml(m.name)+'</td><td class="num">'+fmtMinutes(m.avgMinutes)+'</td><td class="num">'+Math.round(m.avgUnits)+'</td><td class="num">'+m.runs+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById("mealTableWrap").innerHTML = html;
+}
+
+function renderEmployeeList(empStats){
+  if(!empStats.length){ document.getElementById("empList").innerHTML = '<div class="loading">No matched runs in the lookback window yet.</div>'; return; }
+  var maxScore = Math.max.apply(null, empStats.map(function(e){ return e.score; }));
+  var html = "";
+  empStats.forEach(function(e, i){
+    var rankClass = i===0 ? "gold" : i===1 ? "silver" : i===2 ? "bronze" : "";
+    var pct = maxScore > 0 ? Math.max(4, Math.round((e.score/maxScore)*100)) : 4;
+    var rowId = "empRow_" + i;
+    html += '<div class="empRow'+(e.enoughData?"":" lowData")+'" data-emp="'+rowId+'" style="cursor:pointer;">'
+      + '<div class="rank '+rankClass+'">'+(i+1)+'</div>'
+      + '<div class="empMain">'
+        + '<div class="empName">'+escapeHtml(e.name)+(e.enoughData ? '' : '<span class="badge-low">not enough data yet</span>')+' <span style="color:var(--text-faint);font-weight:400;font-size:11px;">— tap for per-meal breakdown</span></div>'
+        + '<div class="empMeta">'+e.runs+' batches · '+e.mealCount+' meal types · worked with '+e.partnerCount+' other'+(e.partnerCount===1?'':'s')+'</div>'
+        + '<div class="trackWrap"><div class="trackFill" style="width:'+pct+'%;"></div></div>'
+        + '<div class="breakdownPanel hidden" id="'+rowId+'">' + renderBreakdownTable(e.breakdown) + '</div>'
+      + '</div>'
+      + '<div class="empScore">'+e.score.toFixed(2)+'×</div>'
+      + '</div>';
+  });
+  document.getElementById("empList").innerHTML = html;
+  document.querySelectorAll(".empRow").forEach(function(row){
+    row.addEventListener("click", function(){
+      var id = row.getAttribute("data-emp");
+      document.getElementById(id).classList.toggle("hidden");
+    });
+  });
+  // animate bars in after paint
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      document.querySelectorAll(".trackFill").forEach(function(el){ el.style.width = el.style.width; });
+    });
+  });
+}
+
+// Per-employee, per-meal actual average time — this is the "compared all
+// across, whoever they were paired with" view: for each meal this person
+// has worked, their own real average minutes next to how that compares to
+// the field average on that same meal (>1x = faster than the field).
+function renderBreakdownTable(breakdown){
+  if(!breakdown.length) return '<div style="font-size:12px;color:var(--text-faint);padding:8px 0;">No matched batches yet.</div>';
+  var html = '<table style="margin-top:8px;"><thead><tr><th>Meal</th><th class="num">Their Avg</th><th class="num">vs Field</th><th class="num">Batches</th></tr></thead><tbody>';
+  breakdown.forEach(function(b){
+    var vs = b.vsOverall ? b.vsOverall.toFixed(2)+'×' : '—';
+    html += '<tr><td>'+escapeHtml(b.mealName)+'</td><td class="num">'+fmtMinutes(b.avgMinutes)+'</td><td class="num">'+vs+'</td><td class="num">'+b.runs+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderDeptStats(){
+  var box = document.getElementById("deptStatGrid");
+  if(!state.deptRate){ box.innerHTML = '<div class="loading">Not enough matched days yet.</div>'; return; }
+  var d = state.deptRate;
+  box.innerHTML =
+    '<div class="statBox"><div class="v">'+d.unitsPerHour.toFixed(1)+'</div><div class="l">meals / hour (dept avg)</div></div>'
+    + '<div class="statBox"><div class="v">'+d.avgShiftHours.toFixed(1)+'h</div><div class="l">avg real shift length</div></div>'
+    + '<div class="statBox"><div class="v">'+Math.round(d.avgUnitsPerDay)+'</div><div class="l">avg meals / day</div></div>'
+    + '<div class="statBox"><div class="v">'+d.sampleDays+'</div><div class="l">days of data used</div></div>';
+}
+
+document.getElementById("calcBtn").addEventListener("click", function(){
+  var n = parseFloat(document.getElementById("calcUnits").value);
+  var out = document.getElementById("calcResult");
+  if(!state.deptRate){ out.textContent = "Not enough data yet to estimate."; return; }
+  if(!n || n <= 0){ out.textContent = "Enter a number of meals first."; return; }
+  var hours = n / state.deptRate.unitsPerHour;
+  out.textContent = "≈ " + hours.toFixed(1) + " department-hours to produce " + Math.round(n) + " meals, at the recent average rate of " + state.deptRate.unitsPerHour.toFixed(1) + "/hour.";
+});
+
+function fmtMinutes(min){
+  if(min < 60) return Math.round(min) + " min";
+  var h = Math.floor(min/60), m = Math.round(min%60);
+  return h + "h " + m + "m";
+}
+function escapeHtml(s){ return (s||"").toString().replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+
+/* ============================================================
+   VOICE BRIEFING — browser SpeechSynthesis only. No external AI call:
+   this project has no backend and no API keys for a generative voice
+   service, so "AI voice" here means the device's own built-in
+   text-to-speech reading a rule-based summary this page assembles from
+   the same numbers on screen, not a model generating new insight.
+============================================================ */
+function buildBriefingText(){
+  var e = state.lastEmpStats || [], m = state.lastMealStats || [];
+  var ranked = e.filter(function(x){ return x.enoughData; });
+  var parts = [];
+  parts.push("Performance briefing, generated " + new Date().toLocaleString([], {weekday:"long", hour:"2-digit", minute:"2-digit"}) + ".");
+  if(state.deptRate){
+    parts.push("Department is averaging " + state.deptRate.unitsPerHour.toFixed(1) + " meals per hour, across a typical " + state.deptRate.avgShiftHours.toFixed(1) + " hour shift.");
+  }
+  if(ranked.length){
+    var top = ranked[0];
+    parts.push(top.name + " leads the efficiency ranking, worked with " + top.partnerCount + " different teammates over the window, which makes that score fairly trustworthy.");
+    var lowDiv = ranked.filter(function(x){ return x.partnerCount <= 1; });
+    if(lowDiv.length){
+      parts.push("Heads up: " + lowDiv.map(function(x){return x.name;}).join(", ") + " only ever worked with one partner in this window, so their individual score is less reliable than the others.");
+    }
+  } else {
+    parts.push("Not enough matched batches yet to rank individual performance.");
+  }
+  if(m.length){
+    var slowest = m[0];
+    parts.push("The slowest meal to produce on average right now is " + slowest.name + ", averaging " + fmtMinutes(slowest.avgMinutes) + " per batch.");
+  }
+  return parts.join(" ");
+}
+document.getElementById("briefingBtn").addEventListener("click", function(){
+  var text = buildBriefingText();
+  document.getElementById("briefingText").textContent = text;
+  if(!("speechSynthesis" in window)){ return; }
+  window.speechSynthesis.cancel();
+  var u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.0;
+  window.speechSynthesis.speak(u);
+});
+
+/* ============================================================
+   REFRESH — daily auto-refresh. No localStorage/sessionStorage per
+   project constraints, so this only tracks "today" in memory: it
+   re-runs the full load whenever the calendar date changes while the
+   page stays open, plus a manual Refresh button and an initial load.
+============================================================ */
+document.getElementById("btnRefresh").addEventListener("click", loadAnalytics);
+
+function boot(){
+  loadAnalytics();
+  var lastDay = new Date().toDateString();
+  setInterval(function(){
+    var nowDay = new Date().toDateString();
+    if(nowDay !== lastDay){ lastDay = nowDay; loadAnalytics(); }
+  }, 5*60*1000); // check every 5 min for a date rollover
+}
+</script>
+</body>
+</html>
