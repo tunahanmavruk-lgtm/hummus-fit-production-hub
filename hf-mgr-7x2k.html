@@ -174,6 +174,7 @@
     <div class="card">
       <h2>Per-Meal Average Time</h2>
       <p class="cardSub">Live-recomputed from real Start Time → Inventory "Added to Shopify" timestamps.</p>
+      <div class="caveat">"Added to Shopify" is often a bulk push, not a per-batch stamp — several batches can share one timestamp because they were verified together, not because they finished at the same minute. That bundles queue-wait time into the recorded duration, and it hits small batches hardest (a fast small batch can look artificially slow sitting in the same bulk push as a big one). Treat this table as directionally right, not to-the-minute precise — especially for meals near the top of the "slowest" list with small average batch sizes.</div>
       <div id="mealTableWrap"><div class="loading">Loading…</div></div>
     </div>
 
@@ -217,6 +218,18 @@ var config = {
   minRunsForRanking: 3 // employees below this many matched runs show as "not enough data" instead of a false rank
 };
 
+// Manual, explicit name merges ONLY — never auto-guessed. Two spellings a
+// human confirms are the same person go here as "misspelled": "canonical".
+// Example live case: "Vanessa" (3 runs, 1 partner) and "Vannesa" (36 runs,
+// 9 partners) are almost certainly the same person, one letter apart — but
+// code has no safe way to tell that apart from two genuinely different
+// people who happen to have similar names, so it deliberately does NOT
+// merge names automatically. Add a confirmed pair below and reship to fix
+// it; leave it empty to keep every name exactly as typed.
+var NAME_ALIASES = {
+  "vanessa": "vannesa" // confirmed by Tony 2026-08-15 — same person, two spellings on the sheet
+};
+
 var state = { runs: [], byDay: [], deptRate: null, loadedAt: null };
 
 /* ============================================================
@@ -254,11 +267,25 @@ function stripPlaceholderCrew(s){ return /^x$/i.test(norm(s)) ? "" : norm(s); }
 // exact kind of silent misattribution this page exists to avoid. Split on
 // "+", "&", or " and " and treat each side as its own name.
 function splitCompoundNames(s){
-  return norm(s).split(/\s*(?:\+|&|\band\b)\s*/i).map(norm).filter(Boolean);
+  return norm(s).split(/\s*(?:\+|&|\band\b)\s*/i).map(norm).filter(Boolean)
+    // A cell like "5&6&8" is a manager typing station numbers into the
+    // Employee columns by mistake, not three people named 5, 6, and 8 —
+    // seen live on 2026-07-27. Drop tokens that are pure digits so a
+    // data-entry slip doesn't manufacture fake employees.
+    .filter(function(n){ return !/^\d+$/.test(n); });
 }
 function normKey(s){ return (s||"").toString().toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 function stripLeadingArticle(s){ return s.replace(/^(the|a|an)\s+/, ''); }
 function invKey(name, batch){ return stripLeadingArticle(normKey(name)) + "::" + norm(batch); }
+// The Station/Inventory join (invKey, above) already strips a leading
+// "the/a/an" so "The Philly Cheesesteak Quesadilla" and "Philly Cheesesteak
+// Quesadilla" match as the same batch. Every place that GROUPS runs by
+// meal name for stats (buildMealStats, and the per-meal lookups inside
+// buildEmployeeStats/buildPairStats) must use that same stripped key —
+// otherwise a meal spelled both ways on different days silently splits
+// into two different baselines instead of one, and the per-employee
+// "vs field average" comparison reads against the wrong number.
+function mealGroupKey(s){ return stripLeadingArticle(normKey(s)); }
 
 function parseTimeOnDate(str, baseDate){
   var s = norm(str);
@@ -418,19 +445,33 @@ function fetchHistoricalDayRunsWithCrew(stationTab, inventoryTab, dayDate){
     invRows.forEach(function(r){
       var n = parseInt(r.machineCrewUnits, 10);
       if(isNaN(n)) return;
-      dayTotalUnits += n;
       invByKey[invKey(r.mealName, r.batchNum)] = { units: n, addedToShopifyRaw: r.addedToShopify };
+      // Only count this unit toward THIS day's total production if it was
+      // actually packaged on this calendar day. The Inventory tab for a
+      // given date can carry a "MEALS PACKED ON <yesterday>" block —
+      // batches started the day before, still being packaged after
+      // midnight. Those units are real, but they're covered by YESTERDAY's
+      // shift-hours span, not today's. Counting them here inflated
+      // dayTotalUnits against an hours figure (shiftHours) that never
+      // included the time those units actually took — e.g. Aug 13 showed
+      // 1,802 carryover units from Aug 12 folded into Aug 13's rate.
+      var packagedAt = parseShopifyTimestamp(r.addedToShopify, dayDate.getFullYear());
+      if(packagedAt && packagedAt.getFullYear() === dayDate.getFullYear()
+        && packagedAt.getMonth() === dayDate.getMonth() && packagedAt.getDate() === dayDate.getDate()){
+        dayTotalUnits += n;
+      }
     });
     var runs = []; var earliestStart = null, latestPackaged = null;
+    var rowsSeen = stationParsed.meals.length, rowsDropped = 0;
     stationParsed.meals.forEach(function(fm){
       var startTime = parseTimeOnDate(fm.startTimeRaw, dayDate);
-      if(!startTime) return;
+      if(!startTime){ rowsDropped++; return; }
       var invHit = invByKey[invKey(fm.mealName, fm.batchNum)];
-      if(!invHit) return;
+      if(!invHit){ rowsDropped++; return; }
       var packagedAt = parseShopifyTimestamp(invHit.addedToShopifyRaw, dayDate.getFullYear());
-      if(!packagedAt) return;
+      if(!packagedAt){ rowsDropped++; return; }
       var totalMinutes = (packagedAt - startTime) / 60000;
-      if(totalMinutes <= 0 || totalMinutes > 20*60) return;
+      if(totalMinutes <= 0 || totalMinutes > 20*60){ rowsDropped++; return; }
       runs.push({ mealName: fm.mealName, station: fm.station, employees: fm.employees, units: invHit.units, totalMinutes: totalMinutes, day: dayDate });
       if(!earliestStart || startTime < earliestStart) earliestStart = startTime;
       if(!latestPackaged || packagedAt > latestPackaged) latestPackaged = packagedAt;
@@ -440,7 +481,7 @@ function fetchHistoricalDayRunsWithCrew(stationTab, inventoryTab, dayDate){
       var span = (latestPackaged - earliestStart) / 3600000;
       if(span > 0 && span <= 20) shiftHours = span;
     }
-    return { runs: runs, shiftHours: shiftHours, dayTotalUnits: dayTotalUnits };
+    return { runs: runs, shiftHours: shiftHours, dayTotalUnits: dayTotalUnits, rowsSeen: rowsSeen, rowsDropped: rowsDropped };
   });
 }
 
@@ -454,7 +495,11 @@ function loadAnalytics(){
       var todayReal = new Date(); todayReal.setHours(0,0,0,0);
       var candidateDates = stationTabs
         .map(function(t){ return parseStationDateFromTabName(t.title); })
-        .filter(function(d){ return d && d.getTime() !== todayReal.getTime(); })
+        // Strictly BEFORE today, not just "not today" — a tab dated
+        // tomorrow (get-ahead prep, created early) was slipping into the
+        // lookback window under a "!== today" check and getting scanned
+        // as if it were a completed historical day.
+        .filter(function(d){ return d && d.getTime() < todayReal.getTime(); })
         .sort(function(a,b){ return b - a; })
         .slice(0, config.lookbackDays);
 
@@ -471,9 +516,20 @@ function loadAnalytics(){
         state.runs = allRuns;
         state.byDay = goodDays;
         state.loadedAt = new Date();
+        // Rows that never turn into a "run" — blank Start Time, no matching
+        // Inventory row, unparseable Shopify timestamp, or an
+        // implausible/negative duration — are silently excluded from every
+        // stat on this page. That's the right call (a bad row shouldn't
+        // corrupt real numbers), but "silent" was hiding how much of the
+        // sheet that actually is. Surface the real percentage instead of
+        // just the count of what made it through.
+        var rowsSeenTotal = goodDays.reduce(function(s,d){ return s + (d.rowsSeen||0); }, 0);
+        var rowsDroppedTotal = goodDays.reduce(function(s,d){ return s + (d.rowsDropped||0); }, 0);
+        state.coverage = rowsSeenTotal > 0 ? { seen: rowsSeenTotal, dropped: rowsDroppedTotal, pct: Math.round((rowsDroppedTotal/rowsSeenTotal)*100) } : null;
         computeDepartmentRate(goodDays);
         renderAll(candidateDates.length);
-        setRefreshStatus("Updated " + state.loadedAt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) + " — " + candidateDates.length + " day(s), " + allRuns.length + " matched runs");
+        setRefreshStatus("Updated " + state.loadedAt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) + " — " + candidateDates.length + " day(s), " + allRuns.length + " matched runs"
+          + (state.coverage ? " (" + state.coverage.pct + "% of station rows excluded — blank/unmatched/bad data)" : ""));
       });
     });
   }).catch(function(err){
@@ -484,17 +540,23 @@ function loadAnalytics(){
 function setRefreshStatus(t){ document.getElementById("refreshStatus").textContent = t; }
 
 function computeDepartmentRate(goodDays){
-  var hourSamples = [], rateSamples = [];
+  var hourSamples = [], rateSamples = [], unitSamples = [];
   goodDays.forEach(function(d){
     if(d.shiftHours && d.dayTotalUnits > 0){
       hourSamples.push(d.shiftHours);
       rateSamples.push(d.dayTotalUnits / d.shiftHours);
+      unitSamples.push(d.dayTotalUnits);
     }
   });
   if(!rateSamples.length){ state.deptRate = null; return; }
   var avgRate = rateSamples.reduce(function(a,b){return a+b;},0) / rateSamples.length;
   var avgHours = hourSamples.reduce(function(a,b){return a+b;},0) / hourSamples.length;
-  var avgUnitsPerDay = avgRate * avgHours;
+  // avgRate * avgHours is NOT the same number as the true average daily
+  // total (E[rate]*E[hours] != E[rate*hours] whenever rate and hours vary
+  // together across days, which they do here) — average the real recorded
+  // daily unit totals directly instead of reconstructing an estimate from
+  // two other averages.
+  var avgUnitsPerDay = unitSamples.reduce(function(a,b){return a+b;},0) / unitSamples.length;
   state.deptRate = { unitsPerHour: avgRate, avgShiftHours: avgHours, avgUnitsPerDay: avgUnitsPerDay, sampleDays: rateSamples.length };
 }
 
@@ -504,7 +566,7 @@ function computeDepartmentRate(goodDays){
 function buildMealStats(){
   var byMeal = {};
   state.runs.forEach(function(r){
-    var key = normKey(r.mealName);
+    var key = mealGroupKey(r.mealName);
     (byMeal[key] = byMeal[key] || { name: r.mealName, runs: [] }).runs.push(r);
   });
   var out = Object.keys(byMeal).map(function(key){
@@ -531,12 +593,25 @@ function buildMealStats(){
 /* ============================================================
    EMPLOYEE PERFORMANCE — see the caveat rendered in the UI. Every run
    credits BOTH Employee 1 and Employee 2 equally (that's the limit of
-   what the sheet records); an employee's score is their average speed
-   index across every batch they appear on, whoever they were paired
-   with. Partner diversity (how many different people they worked
-   with) is shown alongside the score as a trust signal — a score built
-   from many different partners is closer to a real individual read
-   than one built from a single always-same partner.
+   what the sheet records); an employee's score is their performance
+   across every batch they appear on, whoever they were paired with.
+   Partner diversity (how many different people they worked with) is
+   shown alongside the score as a trust signal — a score built from many
+   different partners is closer to a real individual read than one
+   built from a single always-same partner.
+
+   SCORE METHOD — unit-weighted, not a plain average of per-batch ratios.
+   Score = (sum of "expected minutes" across every batch, at that meal's
+   own field-average pace) / (sum of their actual minutes across those
+   same batches). This was a deliberate choice over averaging each
+   batch's individual speed ratio: a plain average treats a 2x-faster
+   batch and a 2x-slower batch as perfectly cancelling out, but they
+   don't cancel in real production time — the slower batch actually
+   costs more real minutes than the faster one saves, and a plain
+   average of ratios hides that. Unit-weighting means a batch's size
+   determines how much it counts, which matches how the department
+   actually experiences speed (a big slow batch costs real hours; a
+   tiny fast one doesn't offset it).
 ============================================================ */
 // Collapses spelling/spacing/punctuation/case variants of the same person
 // into one key ("Reyna F", "Reyna F.", "reyna f", "Reyna  F") so they don't
@@ -544,27 +619,30 @@ function buildMealStats(){
 // whichever raw spelling appeared most often, not the normalized key
 // itself, so the table still reads with real capitalization.
 function normalizeEmployeeKey(name){
-  return lower(name).replace(/\.+$/,'').replace(/\s+/g,' ').trim();
+  var key = lower(name).replace(/\.+$/,'').replace(/\s+/g,' ').trim();
+  return NAME_ALIASES[key] || key;
 }
 
 function buildEmployeeStats(mealStats){
   var mealAvgByKey = {};
-  mealStats.forEach(function(m){ mealAvgByKey[normKey(m.name)] = m.minPerUnit; });
+  mealStats.forEach(function(m){ mealAvgByKey[mealGroupKey(m.name)] = m.minPerUnit; });
 
   var byEmp = {};
   state.runs.forEach(function(r){
     if(!r.units) return;
-    var thisMinPerUnit = r.totalMinutes / r.units;
-    var mealAvg = mealAvgByKey[normKey(r.mealName)];
+    var mealAvg = mealAvgByKey[mealGroupKey(r.mealName)];
     if(!mealAvg) return;
-    var speedIndex = thisMinPerUnit > 0 ? mealAvg / thisMinPerUnit : null; // >1 = faster than meal average
-    if(speedIndex == null || !isFinite(speedIndex)) return;
+    var expectedMinutes = mealAvg * r.units; // what this batch "should" take at the field's own pace
+    if(!isFinite(expectedMinutes) || r.totalMinutes <= 0) return;
+    var thisMinPerUnit = r.totalMinutes / r.units;
     (r.employees || []).forEach(function(name){
       if(!name) return;
       var key = normalizeEmployeeKey(name);
-      var e = (byEmp[key] = byEmp[key] || { key: key, nameCounts: {}, indices: [], partners: {}, mealBreakdown: {} });
+      var e = (byEmp[key] = byEmp[key] || { key: key, nameCounts: {}, runCount: 0, sumExpectedMinutes: 0, sumActualMinutes: 0, partners: {}, mealBreakdown: {} });
       e.nameCounts[name] = (e.nameCounts[name] || 0) + 1;
-      e.indices.push(speedIndex);
+      e.runCount++;
+      e.sumExpectedMinutes += expectedMinutes;
+      e.sumActualMinutes += r.totalMinutes;
       (r.employees || []).forEach(function(p){ if(p && normalizeEmployeeKey(p) !== key) e.partners[normalizeEmployeeKey(p)] = p; });
       var mb = (e.mealBreakdown[r.mealName] = e.mealBreakdown[r.mealName] || { runs: 0, sumMinutes: 0, sumUnits: 0, detail: [] });
       mb.runs++; mb.sumMinutes += r.totalMinutes; mb.sumUnits += r.units;
@@ -575,7 +653,7 @@ function buildEmployeeStats(mealStats){
   var list = Object.keys(byEmp).map(function(key){
     var e = byEmp[key];
     var displayName = Object.keys(e.nameCounts).sort(function(a,b){ return e.nameCounts[b]-e.nameCounts[a]; })[0];
-    var avgIdx = e.indices.reduce(function(a,b){return a+b;},0) / e.indices.length;
+    var score = e.sumActualMinutes > 0 ? e.sumExpectedMinutes / e.sumActualMinutes : null; // >1 = faster than field average, unit-weighted
     // Per-meal breakdown, quantity by quantity: this person's actual
     // individual batches on each meal they've worked — same meal, real
     // batch size, real total minutes — sorted by batch size so runs of
@@ -583,7 +661,7 @@ function buildEmployeeStats(mealStats){
     // read, not one blended average that hides batch-size differences.
     var breakdown = Object.keys(e.mealBreakdown).map(function(mealName){
       var mb = e.mealBreakdown[mealName];
-      var overall = mealAvgByKey[normKey(mealName)];
+      var overall = mealAvgByKey[mealGroupKey(mealName)];
       var personalMinPerUnit = mb.sumUnits > 0 ? mb.sumMinutes / mb.sumUnits : null;
       return {
         mealName: mealName,
@@ -595,11 +673,11 @@ function buildEmployeeStats(mealStats){
     }).sort(function(a,b){ return b.runs - a.runs; });
     return {
       name: displayName,
-      runs: e.indices.length,
-      score: avgIdx,
+      runs: e.runCount,
+      score: score,
       partnerCount: Object.keys(e.partners).length,
       mealCount: breakdown.length,
-      enoughData: e.indices.length >= config.minRunsForRanking,
+      enoughData: e.runCount >= config.minRunsForRanking,
       breakdown: breakdown
     };
   });
@@ -617,32 +695,37 @@ function buildEmployeeStats(mealStats){
 ============================================================ */
 function buildPairStats(mealStats){
   var mealAvgByKey = {};
-  mealStats.forEach(function(m){ mealAvgByKey[normKey(m.name)] = m.minPerUnit; });
+  mealStats.forEach(function(m){ mealAvgByKey[mealGroupKey(m.name)] = m.minPerUnit; });
 
   var byTeam = {};
   state.runs.forEach(function(r){
     if(!r.units || !r.employees || r.employees.length < 2) return; // solo-credited runs aren't a "pair"
-    var thisMinPerUnit = r.totalMinutes / r.units;
-    var mealAvg = mealAvgByKey[normKey(r.mealName)];
+    var mealAvg = mealAvgByKey[mealGroupKey(r.mealName)];
     if(!mealAvg) return;
-    var speedIndex = thisMinPerUnit > 0 ? mealAvg / thisMinPerUnit : null;
-    if(speedIndex == null || !isFinite(speedIndex)) return;
+    var expectedMinutes = mealAvg * r.units;
+    if(!isFinite(expectedMinutes) || r.totalMinutes <= 0) return;
     var teamKey = r.employees.map(normalizeEmployeeKey).sort().join(" & ");
     var teamDisplay = r.employees.slice().sort().join(" & ");
-    var t = (byTeam[teamKey] = byTeam[teamKey] || { display: teamDisplay, indices: [], meals: {} });
-    t.indices.push(speedIndex);
+    var t = (byTeam[teamKey] = byTeam[teamKey] || { display: teamDisplay, runCount: 0, sumExpectedMinutes: 0, sumActualMinutes: 0, meals: {} });
+    t.runCount++;
+    t.sumExpectedMinutes += expectedMinutes;
+    t.sumActualMinutes += r.totalMinutes;
     t.meals[r.mealName] = true;
   });
 
+  // Same unit-weighted scoring as buildEmployeeStats — see the comment
+  // above that function for why (a plain average of per-batch ratios lets
+  // one great small batch cancel out one equally bad one; weighting by
+  // actual batch size matches how the real minutes actually add up).
   var list = Object.keys(byTeam).map(function(teamKey){
     var t = byTeam[teamKey];
-    var avgIdx = t.indices.reduce(function(a,b){return a+b;},0) / t.indices.length;
+    var score = t.sumActualMinutes > 0 ? t.sumExpectedMinutes / t.sumActualMinutes : null;
     return {
       name: t.display,
-      runs: t.indices.length,
-      score: avgIdx,
+      runs: t.runCount,
+      score: score,
       mealCount: Object.keys(t.meals).length,
-      enoughData: t.indices.length >= config.minRunsForRanking
+      enoughData: t.runCount >= config.minRunsForRanking
     };
   });
   list.sort(function(a,b){ return b.score - a.score; });
@@ -662,7 +745,7 @@ function renderAll(daysScanned){
   renderDeptStats();
   document.getElementById("lookbackDaysLabel").textContent = daysScanned;
   document.getElementById("attributionCaveat").textContent =
-    "Every batch on the Station sheet credits TWO people (Employee 1 + Employee 2), never one person alone — there is no field that separates who did what within a pair. Scores below are each person's average speed across every batch they touched, whoever they worked with, blended across all their partners — tap a name for the actual meal-by-meal, batch-by-batch numbers behind that score. \"Worked with N people\" is a trust signal: a score built from many different partners is a more honest individual read than one built from a single always-same partner. Two people who only ever work together will always show identical individual scores — that's a real limit of the source data. The Team Pairings table below is the direct answer to that: it scores the ACTUAL recorded pair together, not blended into anyone's solo number.";
+    "Every batch on the Station sheet credits TWO people (Employee 1 + Employee 2), never one person alone — there is no field that separates who did what within a pair. Scores below are unit-weighted across every batch they touched, whoever they worked with — total expected minutes at the field's own pace divided by their total actual minutes, so a big batch counts more than a small one instead of every batch counting equally. Tap a name for the actual meal-by-meal, batch-by-batch numbers behind that score. \"Worked with N people\" is a trust signal: a score built from many different partners is a more honest individual read than one built from a single always-same partner. Two people who only ever work together will always show identical individual scores — that's a real limit of the source data. The Team Pairings table below is the direct answer to that: it scores the ACTUAL recorded pair together, not blended into anyone's solo number.";
   state.lastMealStats = mealStats; state.lastEmpStats = empStats; state.lastPairStats = pairStats;
 }
 
@@ -831,9 +914,15 @@ function buildBriefingText(){
   } else {
     parts.push("Not enough matched batches yet to rank individual performance.");
   }
-  if(m.length){
+  if(m.length && m[0].minPerUnit != null){
+    // m[0] is ranked by minPerUnit (per-plate time) — quote THAT figure,
+    // not avgMinutes (raw batch duration). Reading out avgMinutes here
+    // could name a meal as "slowest" while reading a total-batch-time
+    // number that belongs to a completely different, bigger-batch meal —
+    // the same conflation the Per-Meal table itself used to have.
     var slowest = m[0];
-    parts.push("The slowest meal to produce on average right now is " + slowest.name + ", averaging " + fmtMinutes(slowest.avgMinutes) + " per batch.");
+    var perPlateStr = slowest.minPerUnit >= 1 ? slowest.minPerUnit.toFixed(1)+" minutes" : Math.round(slowest.minPerUnit*60)+" seconds";
+    parts.push("The slowest meal per plate right now is " + slowest.name + ", averaging " + perPlateStr + " per plate.");
   }
   return parts.join(" ");
 }
