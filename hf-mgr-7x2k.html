@@ -173,8 +173,8 @@
 
     <div class="card">
       <h2>Per-Meal Average Time</h2>
-      <p class="cardSub">Live-recomputed from real Start Time → Inventory "Added to Shopify" timestamps.</p>
-      <div class="caveat">"Added to Shopify" is often a bulk push, not a per-batch stamp — several batches can share one timestamp because they were verified together, not because they finished at the same minute. That bundles queue-wait time into the recorded duration, and it hits small batches hardest (a fast small batch can look artificially slow sitting in the same bulk push as a big one). Treat this table as directionally right, not to-the-minute precise — especially for meals near the top of the "slowest" list with small average batch sizes.</div>
+      <p class="cardSub">Two independent measurements per meal, on purpose — see below.</p>
+      <div class="caveat">"Shopify" time is packaging-verified (start → Inventory's "Added to Shopify" stamp) — trustworthy as a real completion, but that stamp is often a bulk push shared across several batches verified together, which bundles queue-wait time into small batches especially. "Prep" time is Station's own per-batch End Time — immune to the bulk-push problem, but it's an earlier event (prep hand-off, not verified-packaged) and the column is occasionally blank or garbage on the sheet, so "n=" shows how many real batches that average is actually built from. A ⚠ next to a meal name means the two disagree by 1.5x or more — that's exactly where the Shopify number is least trustworthy as a true per-plate speed.</div>
       <div id="mealTableWrap"><div class="loading">Loading…</div></div>
     </div>
 
@@ -381,7 +381,14 @@ function parseStationSheet(csvText){
     var seenNames = {};
     employeeNames = employeeNames.filter(function(n){ var k = lower(n); if(seenNames[k]) return false; seenNames[k]=true; return true; });
     var startTimeRaw = col(row, map, "start_time", 6);
-    meals.push({ mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned", employees: employeeNames, startTimeRaw: startTimeRaw });
+    // Station's own End Time — a per-BATCH timestamp (unlike Inventory's
+    // "Added to Shopify", which can be a bulk push shared across several
+    // batches verified together). Used only as a secondary "Prep Time"
+    // figure alongside the primary Shopify-verified time, never in place
+    // of it — see fetchHistoricalDayRunsWithCrew and the meal table caveat
+    // for why both numbers are kept.
+    var endTimeRaw = col(row, map, "end_time", 7);
+    meals.push({ mealName: mealName, batchNum: batchNum, station: stationAssigned || "unassigned", employees: employeeNames, startTimeRaw: startTimeRaw, endTimeRaw: endTimeRaw });
   }
   return { meals: meals, stations: stations, headerFound:true };
 }
@@ -472,7 +479,19 @@ function fetchHistoricalDayRunsWithCrew(stationTab, inventoryTab, dayDate){
       if(!packagedAt){ rowsDropped++; return; }
       var totalMinutes = (packagedAt - startTime) / 60000;
       if(totalMinutes <= 0 || totalMinutes > 20*60){ rowsDropped++; return; }
-      runs.push({ mealName: fm.mealName, station: fm.station, employees: fm.employees, units: invHit.units, totalMinutes: totalMinutes, day: dayDate });
+      // Secondary figure: Station's own End Time, per-batch (not a bulk
+      // Shopify push), used ONLY for the Per-Meal table's "Prep Time"
+      // column — never for employee/pair scoring, which stays on the
+      // packaging-verified Shopify time so it can't be gamed by a crew
+      // member self-reporting a flattering End Time. Missing/garbage End
+      // Time cells just leave prepMinutes null — no fallback guessing.
+      var prepMinutes = null;
+      var endTime = parseTimeOnDate(fm.endTimeRaw, dayDate);
+      if(endTime){
+        var pm = (endTime - startTime) / 60000;
+        if(pm > 0 && pm <= 20*60) prepMinutes = pm;
+      }
+      runs.push({ mealName: fm.mealName, station: fm.station, employees: fm.employees, units: invHit.units, totalMinutes: totalMinutes, prepMinutes: prepMinutes, day: dayDate });
       if(!earliestStart || startTime < earliestStart) earliestStart = startTime;
       if(!latestPackaged || packagedAt > latestPackaged) latestPackaged = packagedAt;
     });
@@ -575,7 +594,20 @@ function buildMealStats(){
     var sumUnits = b.runs.reduce(function(s,r){ return s+r.units; }, 0);
     var avgMin = sumMin / b.runs.length;
     var avgUnits = sumUnits / b.runs.length;
-    return { name: b.name, runs: b.runs.length, avgMinutes: avgMin, avgUnits: avgUnits, minPerUnit: avgUnits > 0 ? avgMin/avgUnits : null };
+    // Secondary "Prep Time" figure from Station's own End Time — only
+    // over the subset of these runs that actually have a parseable End
+    // Time (not every row does). Kept separate from the primary
+    // Shopify-verified numbers above; see the meal-table caveat for why
+    // both are shown instead of picking one.
+    var prepRuns = b.runs.filter(function(r){ return r.prepMinutes != null; });
+    var prepSumMin = prepRuns.reduce(function(s,r){ return s+r.prepMinutes; }, 0);
+    var prepSumUnits = prepRuns.reduce(function(s,r){ return s+r.units; }, 0);
+    var prepMinPerUnit = prepRuns.length > 0 && prepSumUnits > 0 ? prepSumMin/prepSumUnits : null;
+    return {
+      name: b.name, runs: b.runs.length, avgMinutes: avgMin, avgUnits: avgUnits,
+      minPerUnit: avgUnits > 0 ? avgMin/avgUnits : null,
+      prepMinPerUnit: prepMinPerUnit, prepRunCount: prepRuns.length
+    };
   });
   // Sort by per-plate time, not raw batch duration — a meal made in big
   // batches will always show a large avgMinutes even if it's fast per
@@ -764,10 +796,25 @@ function renderMealTable(mealStats){
     var bv = b.minPerUnit == null ? -Infinity : b.minPerUnit;
     return bv - av;
   });
-  var html = '<table><thead><tr><th>Meal</th><th class="num">Time / Plate</th><th class="num">Avg Batch Time</th><th class="num">Avg Batch Size</th><th class="num">Runs</th></tr></thead><tbody>';
+  // Two independent per-plate measurements shown side by side, on purpose:
+  // "Time/Plate (Shopify)" is packaging-verified but can be inflated by a
+  // bulk push shared across several batches; "Time/Plate (Prep)" is
+  // per-batch from Station's own End Time but is prep hand-off, not
+  // verified-packaged, and occasionally missing/garbage. Neither
+  // replaces the other — where they diverge sharply is exactly where the
+  // Shopify number is least trustworthy as a true per-plate speed, and
+  // that divergence is flagged visually rather than silently picking a
+  // winner.
+  var html = '<table><thead><tr><th>Meal</th><th class="num">Time/Plate (Shopify)</th><th class="num">Time/Plate (Prep)</th><th class="num">Avg Batch Size</th><th class="num">Runs</th></tr></thead><tbody>';
   rows.forEach(function(m){
     var perPlate = m.minPerUnit != null ? (m.minPerUnit >= 1 ? m.minPerUnit.toFixed(1)+" min" : Math.round(m.minPerUnit*60)+" sec") : "—";
-    html += '<tr><td>'+escapeHtml(m.name)+'</td><td class="num">'+perPlate+'</td><td class="num">'+fmtMinutes(m.avgMinutes)+'</td><td class="num">'+Math.round(m.avgUnits)+'</td><td class="num">'+m.runs+'</td></tr>';
+    var prepPerPlate = m.prepMinPerUnit != null ? (m.prepMinPerUnit >= 1 ? m.prepMinPerUnit.toFixed(1)+" min" : Math.round(m.prepMinPerUnit*60)+" sec") + " (n="+m.prepRunCount+")" : "—";
+    var divergeFlag = "";
+    if(m.minPerUnit != null && m.prepMinPerUnit != null && m.prepMinPerUnit > 0){
+      var ratio = m.minPerUnit / m.prepMinPerUnit;
+      if(ratio >= 1.5) divergeFlag = ' <span style="color:var(--red);font-size:10px;" title="Shopify time is '+ratio.toFixed(1)+'x the Prep time — likely bulk-push inflated">⚠</span>';
+    }
+    html += '<tr><td>'+escapeHtml(m.name)+divergeFlag+'</td><td class="num">'+perPlate+'</td><td class="num">'+prepPerPlate+'</td><td class="num">'+Math.round(m.avgUnits)+'</td><td class="num">'+m.runs+'</td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById("mealTableWrap").innerHTML = html;
